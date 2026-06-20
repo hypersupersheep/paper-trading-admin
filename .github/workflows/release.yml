@@ -1,0 +1,80 @@
+name: Release
+
+# 打 v* 标签时,在 macOS 与 Windows 上各自构建单文件可执行,挂到 GitHub Release。
+# 跨平台原生二进制无法在单一机器上交叉编译,所以用两个 runner 分别构建。
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            asset: ptadmin-macos-arm64
+          - os: windows-latest
+            asset: ptadmin-windows-x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PyInstaller
+        run: python -m pip install --upgrade pip pyinstaller
+
+      - name: Build
+        run: pyinstaller --clean --noconfirm ptadmin.spec
+
+      - name: Smoke test (macOS/Linux)
+        if: runner.os != 'Windows'
+        run: |
+          ./dist/ptadmin &
+          PID=$!
+          sleep 4
+          curl -fsS http://127.0.0.1:8800/api/admin/overview > /dev/null
+          kill $PID
+        env:
+          ADMIN_NO_OPEN: '1'
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p out
+          zip -j out/${{ matrix.asset }}.zip dist/ptadmin README.md
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          mkdir out
+          Compress-Archive -Path dist/ptadmin.exe, README.md -DestinationPath out/${{ matrix.asset }}.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: out/*.zip
+
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.zip
+          generate_release_notes: true

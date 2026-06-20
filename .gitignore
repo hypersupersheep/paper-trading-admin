@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+data/
+*.db
+*.db-wal
+*.db-shm
+.venv/
+.DS_Store
+
+# PyInstaller 构建产物
+build/
+dist/
+out/
+*.manifest
+
+# Claude Code 本地设置
+.claude/

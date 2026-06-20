@@ -1,0 +1,2 @@
+# Paper Trading Admin 仅用 Python 标准库,无第三方依赖。
+# 需要 Python 3.10+(用了 X | None 类型语法、ThreadingHTTPServer 等)。

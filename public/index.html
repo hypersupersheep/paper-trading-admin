@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Paper Trading Admin · 实时监控墙</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">▦</span>
+      <span>Paper Trading <strong>Admin</strong></span>
+      <span class="pill" id="conn">连接中…</span>
+    </div>
+    <div class="totals" id="totals"></div>
+    <div class="actions">
+      <label class="refresh">兜底轮询
+        <select id="interval">
+          <option value="2000">2s</option>
+          <option value="3000" selected>3s</option>
+          <option value="5000">5s</option>
+        </select>
+      </label>
+      <button id="add-node">+ 添加节点</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="left">
+      <h2>监控墙</h2>
+      <div class="grid" id="wall"></div>
+    </section>
+    <aside class="right">
+      <section class="panel">
+        <h2>排行榜 <small>按总收益率</small></h2>
+        <ol class="leaderboard" id="leaderboard"></ol>
+      </section>
+      <section class="panel">
+        <h2>告警 <small id="alert-count"></small></h2>
+        <ul class="alerts" id="alerts"></ul>
+      </section>
+    </aside>
+  </main>
+
+  <!-- 下钻弹窗 -->
+  <div class="modal-backdrop" id="modal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h3 id="modal-title"></h3>
+        <button class="close" id="modal-close">×</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- 添加节点 / 开户 通用表单弹窗 -->
+  <div class="modal-backdrop" id="form-modal" hidden>
+    <div class="modal narrow">
+      <div class="modal-head">
+        <h3 id="form-title"></h3>
+        <button class="close" id="form-close">×</button>
+      </div>
+      <div class="modal-body" id="form-body"></div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

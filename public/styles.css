@@ -1,0 +1,99 @@
+:root {
+  --bg: #0d1117; --panel: #161b22; --panel-2: #1c2230; --border: #2a3038;
+  --text: #e6edf3; --muted: #8b949e; --up: #2ea043; --down: #f85149;
+  --warn: #d29922; --crit: #f85149; --info: #58a6ff; --accent: #58a6ff;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.4 -apple-system, "PingFang SC", "Microsoft YaHei", Segoe UI, sans-serif;
+}
+h2 { font-size: 14px; margin: 0 0 10px; color: var(--muted); font-weight: 600; letter-spacing: .03em; }
+h2 small { color: var(--border); font-weight: 400; }
+
+/* 顶栏 */
+.topbar {
+  display: flex; align-items: center; gap: 20px; padding: 10px 18px;
+  background: var(--panel); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 10;
+}
+.brand { display: flex; align-items: center; gap: 8px; font-size: 16px; }
+.logo { color: var(--accent); font-size: 20px; }
+.pill { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: var(--panel-2); color: var(--muted); }
+.pill.ok { color: var(--up); } .pill.bad { color: var(--down); }
+.totals { display: flex; gap: 22px; margin-left: auto; }
+.totals .kv { display: flex; flex-direction: column; }
+.totals .kv b { font-size: 16px; } .totals .kv span { font-size: 11px; color: var(--muted); }
+.actions { display: flex; align-items: center; gap: 12px; }
+.refresh { font-size: 12px; color: var(--muted); }
+select, button { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+
+main { display: grid; grid-template-columns: 1fr 320px; gap: 16px; padding: 16px; align-items: start; }
+.right { display: flex; flex-direction: column; gap: 16px; }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+
+/* 监控墙卡片 */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 14px; cursor: pointer; transition: border-color .15s; position: relative;
+}
+.card:hover { border-color: var(--accent); }
+.card.offline { opacity: .65; }
+.card .head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.card .name { font-weight: 600; font-size: 15px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.dot.online { background: var(--up); box-shadow: 0 0 6px var(--up); }
+.dot.offline { background: var(--down); }
+.dot.degraded { background: var(--warn); }
+.dot.unknown { background: var(--muted); }
+.card .stale { font-size: 11px; color: var(--warn); margin-left: auto; }
+.card .ds { font-size: 11px; color: var(--muted); margin-left: auto; }
+.metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin: 6px 0; }
+.metric { display: flex; flex-direction: column; }
+.metric span { font-size: 11px; color: var(--muted); }
+.metric b { font-size: 15px; font-variant-numeric: tabular-nums; }
+.up { color: var(--up); } .down { color: var(--down); } .flat { color: var(--muted); }
+.spark { width: 100%; height: 34px; margin-top: 4px; }
+.foot { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 6px; }
+
+/* 排行榜 */
+.leaderboard { list-style: none; margin: 0; padding: 0; counter-reset: rank; }
+.leaderboard li { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-bottom: 1px solid var(--border); }
+.leaderboard li:before { counter-increment: rank; content: counter(rank); width: 18px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.leaderboard .lname { flex: 1; }
+.leaderboard .lpct { font-variant-numeric: tabular-nums; }
+
+/* 告警 */
+.alerts { list-style: none; margin: 0; padding: 0; max-height: 50vh; overflow: auto; }
+.alerts li { padding: 7px 8px; border-left: 3px solid var(--border); background: var(--panel-2); border-radius: 0 6px 6px 0; margin-bottom: 6px; font-size: 12.5px; display: flex; gap: 6px; align-items: start; }
+.alerts li.critical { border-color: var(--crit); }
+.alerts li.warning { border-color: var(--warn); }
+.alerts li.info { border-color: var(--info); }
+.alerts .amsg { flex: 1; }
+.alerts .ats { color: var(--muted); font-size: 11px; }
+.alerts .ack { font-size: 11px; padding: 1px 6px; }
+.empty { color: var(--muted); font-size: 12px; padding: 8px 4px; }
+
+/* 弹窗 */
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.modal { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; width: min(860px, 92vw); max-height: 88vh; display: flex; flex-direction: column; }
+.modal.narrow { width: min(440px, 92vw); }
+.modal-head { display: flex; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.modal-head h3 { margin: 0; flex: 1; }
+.close { background: none; border: none; font-size: 22px; color: var(--muted); }
+.modal-body { padding: 16px; overflow: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--muted); font-weight: 600; }
+.section-title { margin: 16px 0 8px; color: var(--muted); font-size: 12px; font-weight: 600; }
+.form-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.form-row label { font-size: 12px; color: var(--muted); }
+.form-row input { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px; color: var(--text); }
+.form-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px; }
+.btn-primary { background: var(--accent); color: #04101f; border: none; font-weight: 600; }
+.btn-danger { color: var(--down); border-color: var(--down); }
+.msg { font-size: 12px; padding: 8px; border-radius: 6px; margin-top: 8px; }
+.msg.err { background: rgba(248,81,73,.15); color: var(--down); }
+.msg.ok { background: rgba(46,160,67,.15); color: var(--up); }
