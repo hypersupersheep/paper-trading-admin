@@ -37,7 +37,7 @@ class Config:
     public_dir: Path = ROOT / "public"
     admin_token: str = ""          # 空 = 写操作不鉴权(仅适合可信局域网)
 
-    poll_interval: float = 3.0     # 轮询周期(秒);文档建议 2–5
+    poll_interval: float = 15.0    # 轮询周期(秒);节点支持 SSE 后实时性交给 SSE,轮询只兜底,故默认放宽到 15
     poll_timeout: float = 2.5      # 单节点请求超时
     poll_workers: int = 16         # 并发拉取线程数
     sample_every: float = 30.0     # 每隔多少秒落一个净值时序采样点
@@ -69,7 +69,7 @@ class Config:
             db_path=Path(db).expanduser().resolve() if db else default_db,
             public_dir=default_public,
             admin_token=os.environ.get("ADMIN_TOKEN", ""),
-            poll_interval=_f("POLL_INTERVAL", 3.0),
+            poll_interval=_f("POLL_INTERVAL", 15.0),
             poll_timeout=_f("POLL_TIMEOUT", 2.5),
             poll_workers=_i("POLL_WORKERS", 16),
             sample_every=_f("SAMPLE_EVERY", 30.0),

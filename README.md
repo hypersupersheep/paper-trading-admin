@@ -60,7 +60,7 @@ HOST=0.0.0.0 python3 -m backend.server
 |---|---|---|
 | `ADMIN_PORT` | `8800` | 监听端口 |
 | `ADMIN_TOKEN` | 空 | 设置后,写操作需校验该令牌 |
-| `POLL_INTERVAL` | `3.0` | 轮询周期(秒) |
+| `POLL_INTERVAL` | `15.0` | 轮询兜底周期(秒);实时更新走节点 SSE,轮询只补漏 |
 | `ADMIN_DB` | `data/admin.db` | Admin 数据库路径 |
 
 完整项见 [`admin/config.py`](admin/config.py)。

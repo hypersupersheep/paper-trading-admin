@@ -58,7 +58,7 @@ ADMIN_TOKEN=改成你的口令 python3 -m admin
 |---|---|---|
 | `ADMIN_PORT` | `8800` | 端口 |
 | `ADMIN_TOKEN` | 空 | **共享口令**:设了之后,登记 / 开户 / 注销等写操作要带它。生产建议设。 |
-| `POLL_INTERVAL` | `3.0` | 多少秒拉一次(2–5 合适) |
+| `POLL_INTERVAL` | `15.0` | 轮询兜底周期(秒);实时走 SSE,轮询只补漏。无 SSE 的节点可调小 |
 | `ADMIN_DB` | `data/admin.db` | Admin 自己的库 |
 
 ---
@@ -109,7 +109,8 @@ curl -X POST http://localhost:8000/api/admin-link \
 - **下钻**:点卡片 → 该账户的持仓明细 + 最近成交。
 - **告警**:节点离线 / 恢复(模拟盘只做连通性告警,不做盈亏阈值告警)。
 - **实时(事件驱动)**:节点 v1.12.0 起推 `/api/stream` SSE,有成交(`trade_filled`)/ 开户 / 删户即推;Admin 收到就**立即重拉该节点**(秒级),浏览器再经 Admin 自己的 SSE 实时刷新,顶栏显示「实时 / 重连中 / 轮询兜底」。轮询转为**兜底**(SSE 断 / 节点重启时补齐)。
-  - 节点都支持 SSE 后,可把 `POLL_INTERVAL` 调大(如 15–30s)省流量,实时性交给 SSE。
+  - 默认 `POLL_INTERVAL=15s`(全队已 SSE,轮询只兜底);想更省可调到 30s,某节点不支持 SSE 则对它调小。
+  - SSE 事件类型(v1.12.1):`trade_filled` / `account_created` / `account_deleted` / `order_rejected`(带 reason)/ `reverse_repo`(带金额利息)。Admin 收到任意一类即重拉该节点,无需逐类处理。
 
 ---
 
