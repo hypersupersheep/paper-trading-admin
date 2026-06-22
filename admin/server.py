@@ -54,34 +54,89 @@ def _node_card(node: dict[str, Any], state: dict[str, Any] | None, spark: list[f
     return card
 
 
-def build_overview(db: Database, registry: Registry) -> dict[str, Any]:
-    nodes = registry.list()
-    states = db.all_states()
-    cards: list[dict[str, Any]] = []
-    for node in nodes:
-        st = states.get(node["id"])
-        spark = [s["equity"] for s in db.samples(node["id"], limit=60) if s.get("equity") is not None]
-        cards.append(_node_card(node, st, spark))
-
-    online = [c for c in cards if c["status"] == "online"]
-    totals = {
-        "node_count": len(cards),
-        "online": len(online),
-        "offline": sum(1 for c in cards if c["status"] == "offline"),
-        "equity": round(sum(c.get("equity") or 0.0 for c in online), 2),
-        "pnl": round(sum(c.get("pnl") or 0.0 for c in online), 2),
-        "position_count": sum(int(c.get("position_count") or 0) for c in online),
+def _account_card(reg: dict[str, Any], node: dict[str, Any] | None,
+                  state: dict[str, Any] | None, metrics: dict[str, Any] | None,
+                  spark: list[float]) -> dict[str, Any]:
+    """一张账户卡:身份(注册表)+ 实时指标(节点 summary 里该账户)+ 节点连通性。"""
+    node_status = (state or {}).get("status", "unknown")
+    present = metrics is not None
+    if node_status == "online":
+        status = "online" if present else "missing"   # 节点在线但 summary 里没这账户(已删/未同步)
+    elif node_status in ("offline", "degraded"):
+        status = node_status                           # 用最后已知指标兜底展示
+    else:
+        status = "unknown"
+    m = metrics or {}
+    return {
+        "node_id": reg["node_id"], "account_id": reg["account_id"],
+        "owner": reg.get("owner") or reg.get("name") or reg["account_id"],
+        "name": reg.get("name") or reg["account_id"],
+        "node_name": (node or {}).get("name") or reg["node_id"],
+        "status": status, "last_ok_at": (state or {}).get("last_ok_at"),
+        "equity": _to_num(m.get("equity")), "pnl": _to_num(m.get("pnl")),
+        "pnl_pct": _to_num(m.get("pnl_pct")), "exposure": _to_num(m.get("exposure")),
+        "day_pnl": _to_num(m.get("day_pnl")),
+        "position_count": len(m.get("positions") or []),
+        "spark": spark,
     }
-    # 排行榜:在线节点按总收益率降序
-    leaderboard = sorted(
-        [c for c in cards if c.get("pnl_pct") is not None and c["status"] != "offline"],
-        key=lambda c: c["pnl_pct"], reverse=True,
-    )
-    leaderboard = [{"id": c["id"], "name": c["name"], "pnl_pct": c["pnl_pct"],
-                    "pnl": c.get("pnl"), "day_pnl": c.get("day_pnl"), "equity": c.get("equity")}
-                   for c in leaderboard]
+
+
+def _to_num(v: Any) -> float | None:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def build_overview(db: Database, registry: Registry) -> dict[str, Any]:
+    nodes = {n["id"]: n for n in registry.list()}
+    states = db.all_states()
+
+    # 节点卡(连通性视图,仍保留)
+    node_cards = [
+        _node_card(node, states.get(node["id"]),
+                   [s["equity"] for s in db.samples(node["id"], limit=60) if s.get("equity") is not None])
+        for node in nodes.values()
+    ]
+
+    # 账户卡(监控单元):按已登记账户,从其节点最近 summary 里取该账户实时指标
+    summaries: dict[str, dict] = {}
+    for nid, st in states.items():
+        if st.get("summary_json"):
+            try:
+                summaries[nid] = json.loads(st["summary_json"])
+            except (ValueError, TypeError):
+                pass
+
+    account_cards: list[dict[str, Any]] = []
+    for reg in registry.accounts():
+        nid, aid = reg["node_id"], reg["account_id"]
+        accounts = (summaries.get(nid) or {}).get("accounts") or []
+        metrics = next((a for a in accounts if a.get("id") == aid), None)
+        spark = [s["equity"] for s in db.account_samples(nid, aid, limit=60) if s.get("equity") is not None]
+        account_cards.append(_account_card(reg, nodes.get(nid), states.get(nid), metrics, spark))
+
+    live = [c for c in account_cards if c["status"] == "online"]
+    totals = {
+        "account_count": len(account_cards),
+        "online": len(live),
+        "node_count": len(node_cards),
+        "node_online": sum(1 for c in node_cards if c["status"] == "online"),
+        "equity": round(sum(c.get("equity") or 0.0 for c in live), 2),
+        "pnl": round(sum(c.get("pnl") or 0.0 for c in live), 2),
+        "position_count": sum(int(c.get("position_count") or 0) for c in live),
+    }
+    # 排行榜:按账户总收益率降序(离线账户不参与排名)
+    leaderboard = [
+        {"account_id": c["account_id"], "owner": c["owner"], "name": c["name"],
+         "pnl_pct": c["pnl_pct"], "pnl": c.get("pnl"), "day_pnl": c.get("day_pnl"), "equity": c.get("equity")}
+        for c in sorted(
+            [c for c in account_cards if c.get("pnl_pct") is not None and c["status"] != "offline"],
+            key=lambda c: c["pnl_pct"], reverse=True)
+    ]
     alerts = db.list_alerts(limit=50, unack_only=True)
-    return {"nodes": cards, "totals": totals, "leaderboard": leaderboard, "alerts": alerts}
+    return {"accounts": account_cards, "nodes": node_cards,
+            "totals": totals, "leaderboard": leaderboard, "alerts": alerts}
 
 
 # ---- Handler ------------------------------------------------------------
@@ -148,6 +203,9 @@ def build_handler(services: Services) -> type[BaseHTTPRequestHandler]:
                         limit=int(q.get("limit") or 100),
                         unack_only=q.get("unack") in ("1", "true"))})
                     return
+                if path == "/api/admin/accounts":
+                    self._json({"accounts": registry.accounts(self._query().get("node_id"))})
+                    return
                 if path == "/api/admin/events":
                     self._sse_events()
                     return
@@ -180,6 +238,26 @@ def build_handler(services: Services) -> type[BaseHTTPRequestHandler]:
                     source = "self" if path.endswith("register") else "manual"
                     node = registry.register(payload, source=source)
                     self._json({"node": node}, HTTPStatus.CREATED)
+                    return
+                # 账户级登记(app 开户/登记后调用;支持单条 account 或批量 accounts[])
+                if path == "/api/admin/accounts/register":
+                    if not self._auth_ok():
+                        self._json({"error": "需要有效的 X-Admin-Token"}, HTTPStatus.UNAUTHORIZED)
+                        return
+                    self._json(registry.register_accounts(payload), HTTPStatus.CREATED)
+                    return
+                # 账户注销:/api/admin/accounts/{node_id}/{account_id}/delete
+                if path.startswith("/api/admin/accounts/") and path.endswith("/delete"):
+                    if not self._auth_ok():
+                        self._json({"error": "需要有效的 X-Admin-Token"}, HTTPStatus.UNAUTHORIZED)
+                        return
+                    rest = path.removeprefix("/api/admin/accounts/").removesuffix("/delete")
+                    parts = rest.split("/")
+                    if len(parts) < 2:
+                        raise ValueError("路径需为 /api/admin/accounts/{node_id}/{account_id}/delete")
+                    node_id = unquote(parts[0])
+                    account_id = unquote("/".join(parts[1:]))
+                    self._json({"deregistered": registry.deregister_account(node_id, account_id)})
                     return
                 if path.startswith("/api/admin/nodes/") and path.endswith("/delete"):
                     if not self._auth_ok():

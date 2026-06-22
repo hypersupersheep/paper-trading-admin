@@ -46,6 +46,20 @@ CREATE TABLE IF NOT EXISTS node_state (
     updated_at       TEXT
 );
 
+CREATE TABLE IF NOT EXISTS accounts (
+    node_id       TEXT NOT NULL,
+    account_id    TEXT NOT NULL,
+    owner         TEXT,
+    name          TEXT,
+    currency      TEXT,
+    market        TEXT,
+    initial_cash  REAL,
+    enabled       INTEGER NOT NULL DEFAULT 1,
+    registered_at TEXT,
+    updated_at    TEXT,
+    PRIMARY KEY (node_id, account_id)
+);
+
 CREATE TABLE IF NOT EXISTS equity_samples (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     node_id        TEXT NOT NULL,
@@ -58,6 +72,19 @@ CREATE TABLE IF NOT EXISTS equity_samples (
     position_count INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_samples_node_ts ON equity_samples(node_id, ts);
+
+CREATE TABLE IF NOT EXISTS account_samples (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_id    TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    ts         TEXT NOT NULL,
+    equity     REAL,
+    pnl        REAL,
+    pnl_pct    REAL,
+    day_pnl    REAL,
+    exposure   REAL
+);
+CREATE INDEX IF NOT EXISTS idx_acct_samples ON account_samples(node_id, account_id, ts);
 
 CREATE TABLE IF NOT EXISTS alerts (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -150,6 +177,53 @@ class Database:
             conn.execute("DELETE FROM node_state WHERE node_id = ?", (node_id,))
             conn.execute("DELETE FROM equity_samples WHERE node_id = ?", (node_id,))
 
+    # ---- accounts(账户级登记)------------------------------------------
+    def upsert_account(self, account: dict[str, Any]) -> None:
+        with self.write() as conn:
+            conn.execute(
+                """
+                INSERT INTO accounts (node_id, account_id, owner, name, currency, market,
+                                      initial_cash, enabled, registered_at, updated_at)
+                VALUES (:node_id, :account_id, :owner, :name, :currency, :market,
+                        :initial_cash, 1, :registered_at, :updated_at)
+                ON CONFLICT(node_id, account_id) DO UPDATE SET
+                    owner=COALESCE(excluded.owner, accounts.owner),
+                    name=COALESCE(excluded.name, accounts.name),
+                    currency=COALESCE(excluded.currency, accounts.currency),
+                    market=COALESCE(excluded.market, accounts.market),
+                    initial_cash=COALESCE(excluded.initial_cash, accounts.initial_cash),
+                    enabled=1,
+                    updated_at=excluded.updated_at
+                """,
+                account,
+            )
+
+    def list_accounts(self, node_id: str | None = None) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM accounts"
+        params: tuple = ()
+        if node_id:
+            sql += " WHERE node_id = ?"
+            params = (node_id,)
+        sql += " ORDER BY owner, account_id"
+        with self.read() as conn:
+            return [dict(r) for r in conn.execute(sql, params)]
+
+    def get_account(self, node_id: str, account_id: str) -> dict[str, Any] | None:
+        with self.read() as conn:
+            row = conn.execute(
+                "SELECT * FROM accounts WHERE node_id = ? AND account_id = ?",
+                (node_id, account_id),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def delete_account(self, node_id: str, account_id: str) -> bool:
+        with self.write() as conn:
+            cur = conn.execute(
+                "DELETE FROM accounts WHERE node_id = ? AND account_id = ?",
+                (node_id, account_id),
+            )
+            return cur.rowcount > 0
+
     # ---- node_state -----------------------------------------------------
     def save_state(self, state: dict[str, Any]) -> None:
         cols = ("node_id", "status", "last_ok_at", "last_error", "latency_ms",
@@ -192,6 +266,23 @@ class Database:
                 (node_id, limit),
             ).fetchall()
         return [dict(r) for r in reversed(rows)]  # 时间正序返回
+
+    def add_account_sample(self, sample: dict[str, Any]) -> None:
+        with self.write() as conn:
+            conn.execute(
+                """INSERT INTO account_samples
+                   (node_id, account_id, ts, equity, pnl, pnl_pct, day_pnl, exposure)
+                   VALUES (:node_id, :account_id, :ts, :equity, :pnl, :pnl_pct, :day_pnl, :exposure)""",
+                sample,
+            )
+
+    def account_samples(self, node_id: str, account_id: str, limit: int = 240) -> list[dict[str, Any]]:
+        with self.read() as conn:
+            rows = conn.execute(
+                "SELECT * FROM account_samples WHERE node_id = ? AND account_id = ? ORDER BY ts DESC LIMIT ?",
+                (node_id, account_id, limit),
+            ).fetchall()
+        return [dict(r) for r in reversed(rows)]
 
     # ---- alerts ---------------------------------------------------------
     def add_alert(self, alert: dict[str, Any]) -> int:

@@ -139,7 +139,11 @@ Admin 自己的 SQLite(`data/admin.db`),与节点 DB 完全隔离。建表见 `a
 | `summary_json` / `trades_json` / `meta_json` | 最近原文(下钻 + 离线展示) |
 | `updated_at` | |
 
-### `equity_samples` — 净值时序(sparkline / 走势 / 回看)
+### `accounts` — 账户注册表(监控单元)
+主键 `(node_id, account_id)`,列:`owner / name / currency / market / initial_cash / enabled / registered_at / updated_at`。
+account 实时指标不存这里 —— 轮询时从所属节点 `node_state.summary_json` 的 `accounts[]` 里按 id 取(单一真相,避免双写)。
+
+### `equity_samples` — 节点净值时序;`account_samples` — 账户净值时序(账户卡 sparkline)
 `(id PK, node_id, ts, equity, pnl, pnl_pct, day_pnl, exposure, position_count)`,索引 `(node_id, ts)`。
 每 `SAMPLE_EVERY` 秒落一点(非每轮),避免膨胀。
 
@@ -154,7 +158,10 @@ Admin 自己的 SQLite(`data/admin.db`),与节点 DB 完全隔离。建表见 `a
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/admin/overview` | 监控墙首屏:`{nodes:[扁平state], totals, leaderboard, alerts(未确认)}` |
+| GET | `/api/admin/overview` | 监控墙首屏:`{accounts:[账户卡], nodes:[节点连通性], totals, leaderboard(按账户), alerts(未确认)}` |
+| POST | `/api/admin/accounts/register` | 账户登记(单条 `{node, account}` 或批量 `{node, accounts:[]}`);幂等于 `(node.id, account.id)`;返回 `201 {node_id, accounts:[...]}` |
+| POST | `/api/admin/accounts/{node_id}/{account_id}/delete` | 账户注销;无需 body;返回 `{deregistered: bool}` |
+| GET | `/api/admin/accounts` | 已登记账户列表(可带 `?node_id=`) |
 | GET | `/api/admin/nodes` | 注册表 |
 | POST | `/api/admin/nodes` | 手动加节点(body 见 §2 nodes) |
 | POST | `/api/admin/nodes/{id}/delete` | 删节点(连带 state/samples 不删历史 alerts) |

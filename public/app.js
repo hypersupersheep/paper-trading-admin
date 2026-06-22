@@ -53,39 +53,50 @@ function sparkline(values) {
 }
 
 // ---- 渲染:监控墙 -------------------------------------------------------
+const STATUS_LABEL = { online: "", offline: "离线", degraded: "连接异常", missing: "节点上已删", unknown: "未知" };
+
 function renderTotals(t) {
   $("#totals").innerHTML = `
-    <div class="kv"><b class="${signClass(t.pnl)}">${fmtMoney(t.pnl)}</b><span>总盈亏</span></div>
-    <div class="kv"><b>${fmtMoney(t.equity)}</b><span>总净值</span></div>
-    <div class="kv"><b>${t.online}/${t.node_count}</b><span>在线节点</span></div>
-    <div class="kv"><b>${t.position_count}</b><span>总持仓数</span></div>`;
+    <div class="kv"><b class="${signClass(t.pnl)}">${fmtMoney(t.pnl)}</b><span>在线账户盈亏</span></div>
+    <div class="kv"><b>${fmtMoney(t.equity)}</b><span>在线账户净值</span></div>
+    <div class="kv"><b>${t.online}/${t.account_count}</b><span>在线账户</span></div>
+    <div class="kv"><b>${t.node_online}/${t.node_count}</b><span>在线节点</span></div>`;
 }
 
-function renderWall(nodes) {
+function renderWall(accounts) {
   const wall = $("#wall");
   wall.innerHTML = "";
-  if (!nodes.length) { wall.appendChild(el("div", "empty", "还没有节点。点右上角「+ 添加节点」,或让节点自注册。")); return; }
-  for (const n of nodes) {
-    const card = el("div", "card " + (n.status === "offline" ? "offline" : ""));
-    const stale = n.status !== "online" && n.last_ok_at ? `<span class="stale">最后已知 ${ago(n.last_ok_at)}</span>` : `<span class="ds">${n.data_source || ""}</span>`;
+  if (!accounts.length) {
+    wall.appendChild(el("div", "empty", "还没有已登记账户。节点开户并接入 Admin 后,账户会自动登记上墙。"));
+    return;
+  }
+  // 按 owner、再按账户名排序(同一交易员的账户相邻)
+  const rows = [...accounts].sort((a, b) =>
+    (a.owner || "").localeCompare(b.owner || "") || (a.name || "").localeCompare(b.name || ""));
+  for (const a of rows) {
+    const card = el("div", "card " + (a.status === "offline" ? "offline" : ""));
+    const note = a.status !== "online"
+      ? `<span class="stale">${STATUS_LABEL[a.status] || a.status}${a.last_ok_at ? " · " + ago(a.last_ok_at) : ""}</span>`
+      : `<span class="ds">${a.node_name}</span>`;
     card.innerHTML = `
       <div class="head">
-        <span class="dot ${n.status}"></span>
-        <span class="name">${n.name}</span>
-        ${stale}
+        <span class="dot ${a.status === "missing" ? "degraded" : a.status}"></span>
+        <span class="name">${a.owner}</span>
+        ${note}
       </div>
+      <div class="acct-sub">${a.name}</div>
       <div class="metrics">
-        <div class="metric"><span>总收益率</span><b class="${signClass(n.pnl_pct)}">${fmtPct(n.pnl_pct)}</b></div>
-        <div class="metric"><span>当日盈亏</span><b class="${signClass(n.day_pnl)}">${fmtMoney(n.day_pnl)}</b></div>
-        <div class="metric"><span>净值</span><b>${fmtMoney(n.equity)}</b></div>
-        <div class="metric"><span>仓位</span><b>${fmtPct(n.exposure)}</b></div>
+        <div class="metric"><span>总收益率</span><b class="${signClass(a.pnl_pct)}">${fmtPct(a.pnl_pct)}</b></div>
+        <div class="metric"><span>当日盈亏</span><b class="${signClass(a.day_pnl)}">${fmtMoney(a.day_pnl)}</b></div>
+        <div class="metric"><span>净值</span><b>${fmtMoney(a.equity)}</b></div>
+        <div class="metric"><span>仓位</span><b>${fmtPct(a.exposure)}</b></div>
       </div>
-      ${sparkline(n.spark)}
+      ${sparkline(a.spark)}
       <div class="foot">
-        <span>${n.account_count ?? "—"} 账户 · ${n.position_count ?? "—"} 持仓</span>
-        <span>${n.status === "online" ? (n.latency_ms ?? "—") + "ms" : (n.last_error ? "离线" : "—")}</span>
+        <span>${a.node_name}</span>
+        <span>${a.position_count ?? "—"} 持仓</span>
       </div>`;
-    card.onclick = () => openDetail(n.id, n.name);
+    card.onclick = () => openAccount(a.node_id, a.account_id, a.owner, a.name);
     wall.appendChild(card);
   }
 }
@@ -96,7 +107,7 @@ function renderLeaderboard(rows) {
   if (!rows.length) { lb.appendChild(el("li", "empty", "暂无在线数据")); return; }
   for (const r of rows) {
     const li = el("li");
-    li.innerHTML = `<span class="lname">${r.name}</span>
+    li.innerHTML = `<span class="lname">${r.owner}<small>${r.name && r.name !== r.owner ? " · " + r.name : ""}</small></span>
       <span class="lpct ${signClass(r.pnl_pct)}">${fmtPct(r.pnl_pct)}</span>`;
     lb.appendChild(li);
   }
@@ -121,8 +132,8 @@ function renderAlerts(rows) {
 }
 
 // ---- 下钻弹窗 -----------------------------------------------------------
-async function openDetail(nodeId, name) {
-  $("#modal-title").textContent = name;
+async function openAccount(nodeId, accountId, owner, name) {
+  $("#modal-title").textContent = `${owner} · ${name}`;
   $("#modal-body").innerHTML = "加载中…";
   $("#modal").hidden = false;
   try {
@@ -130,35 +141,41 @@ async function openDetail(nodeId, name) {
       api("GET", `/api/admin/nodes/${nodeId}`),
       api("GET", `/api/admin/nodes/${nodeId}/trades`),
     ]);
-    $("#modal-body").innerHTML = renderDetail(nodeId, detail, trades.trades || []);
-    wireDetail(nodeId, name);
+    $("#modal-body").innerHTML = renderAccountDetail(accountId, detail, trades.trades || []);
+    const nodeName = (detail.node && detail.node.name) || nodeId;
+    $("#act-open-account").onclick = () => openAccountForm(nodeId, nodeName);
   } catch (e) {
     $("#modal-body").innerHTML = `<div class="msg err">${e.message}</div>`;
   }
 }
 
-function renderDetail(nodeId, detail, trades) {
+function renderAccountDetail(accountId, detail, allTrades) {
   const accounts = (detail.summary && detail.summary.accounts) || [];
+  const a = accounts.find((x) => x.id === accountId);
   let html = `<div class="form-actions" style="justify-content:flex-start">
-      <button class="btn-primary" id="act-open-account">远程开户</button>
-      <button class="btn-danger" id="act-delete-node">删除节点</button>
+      <button class="btn-primary" id="act-open-account">在该节点远程开户</button>
     </div>`;
 
-  for (const a of accounts) {
-    html += `<div class="section-title">账户 ${a.name} · 净值 ${fmtMoney(a.equity)} · 收益 <span class="${signClass(a.pnl_pct)}">${fmtPct(a.pnl_pct)}</span></div>`;
+  if (a) {
+    html += `<div class="section-title">净值 ${fmtMoney(a.equity)} · 收益 <span class="${signClass(a.pnl_pct)}">${fmtPct(a.pnl_pct)}</span> · 当日 <span class="${signClass(a.day_pnl)}">${fmtMoney(a.day_pnl)}</span> · 仓位 ${fmtPct(a.exposure)}</div>`;
     const pos = a.positions || [];
-    if (!pos.length) { html += `<div class="empty">无持仓</div>`; continue; }
-    html += `<table><thead><tr><th>标的</th><th>数量</th><th>成本</th><th>现价</th><th>市值</th><th>浮盈</th></tr></thead><tbody>`;
-    for (const p of pos) {
-      html += `<tr><td>${p.name || p.symbol}</td><td>${p.quantity}</td><td>${p.avg_cost ?? "—"}</td>
-        <td>${p.last_price ?? "—"}</td><td>${fmtMoney(p.market_value)}</td>
-        <td class="${signClass(p.unrealized_pnl)}">${fmtMoney(p.unrealized_pnl)}</td></tr>`;
+    if (!pos.length) html += `<div class="empty">无持仓</div>`;
+    else {
+      html += `<table><thead><tr><th>标的</th><th>数量</th><th>成本</th><th>现价</th><th>市值</th><th>浮盈</th></tr></thead><tbody>`;
+      for (const p of pos) {
+        html += `<tr><td>${p.name || p.symbol}</td><td>${p.quantity}</td><td>${p.avg_cost ?? "—"}</td>
+          <td>${p.last_price ?? "—"}</td><td>${fmtMoney(p.market_value)}</td>
+          <td class="${signClass(p.unrealized_pnl)}">${fmtMoney(p.unrealized_pnl)}</td></tr>`;
+      }
+      html += `</tbody></table>`;
     }
-    html += `</tbody></table>`;
+  } else {
+    html += `<div class="msg err">该账户当前不在节点最新数据中(可能已删除或节点离线)。</div>`;
   }
 
+  const trades = allTrades.filter((t) => t.account_id === accountId);
   html += `<div class="section-title">最近成交</div>`;
-  if (!trades.length) { html += `<div class="empty">无成交记录</div>`; }
+  if (!trades.length) html += `<div class="empty">无成交记录</div>`;
   else {
     html += `<table><thead><tr><th>时间</th><th>标的</th><th>方向</th><th>数量</th><th>价格</th><th>净额</th><th>已实现</th></tr></thead><tbody>`;
     for (const t of trades.slice(0, 30)) {
@@ -173,16 +190,6 @@ function renderDetail(nodeId, detail, trades) {
     html += `</tbody></table>`;
   }
   return html;
-}
-
-function wireDetail(nodeId, name) {
-  $("#act-delete-node").onclick = async () => {
-    if (!confirm(`确认从监控墙移除节点「${name}」?(不影响该节点交易)`)) return;
-    await api("POST", `/api/admin/nodes/${nodeId}/delete`);
-    $("#modal").hidden = true;
-    refresh();
-  };
-  $("#act-open-account").onclick = () => openAccountForm(nodeId, name);
 }
 
 // ---- 表单弹窗:添加节点 / 远程开户 -------------------------------------
@@ -232,7 +239,7 @@ function openAccountForm(nodeId, name) {
 // ---- 主循环:优先 SSE 推送,断连时退回轮询 -------------------------------
 function renderAll(d) {
   renderTotals(d.totals);
-  renderWall(d.nodes);
+  renderWall(d.accounts || []);
   renderLeaderboard(d.leaderboard);
   renderAlerts(d.alerts);
 }

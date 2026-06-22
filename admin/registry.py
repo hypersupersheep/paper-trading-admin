@@ -70,3 +70,56 @@ class Registry:
             return False
         self.db.delete_node(node_id)
         return True
+
+    # ---- 账户级登记 -----------------------------------------------------
+    def register_accounts(self, payload: dict[str, Any], *, source: str = "app") -> dict[str, Any]:
+        """账户登记。报文形如 {"node": {...}, "account": {...}} 或 {"node": {...}, "accounts": [...]}.
+
+        node 段先 upsert(复用节点登记,拿到稳定 node_id 作传输层);account 段写账户注册表。
+        幂等:主键 (node_id, account_id)。单条 / 批量(register-all)共用本入口。
+        """
+        node_payload = payload.get("node")
+        if not isinstance(node_payload, dict):
+            raise ValueError("缺少 node 段")
+        node = self.register(node_payload, source=source)  # upsert 节点(已校验 base_url/id)
+        node_id = node["id"]
+
+        rows = payload.get("accounts")
+        if rows is None:
+            single = payload.get("account")
+            if not isinstance(single, dict):
+                raise ValueError("缺少 account 或 accounts 段")
+            rows = [single]
+        if not isinstance(rows, list) or not rows:
+            raise ValueError("accounts 必须是非空数组")
+
+        registered: list[dict[str, Any]] = []
+        for acct in rows:
+            registered.append(self._upsert_account(node_id, acct))
+        return {"node_id": node_id, "accounts": registered}
+
+    def _upsert_account(self, node_id: str, acct: dict[str, Any]) -> dict[str, Any]:
+        account_id = str(acct.get("id") or "").strip()
+        if not account_id:
+            raise ValueError("account.id 必填")
+        existing = self.db.get_account(node_id, account_id)
+        row = {
+            "node_id": node_id,
+            "account_id": account_id,
+            "owner": acct.get("owner") or acct.get("name") or None,  # 缺 owner 回退账户名
+            "name": acct.get("name") or None,
+            "currency": acct.get("currency") or None,
+            "market": acct.get("market") or None,
+            "initial_cash": acct.get("initial_cash"),
+            "registered_at": (existing or {}).get("registered_at") or _now(),
+            "updated_at": _now(),
+        }
+        self.db.upsert_account(row)
+        row["_action"] = "updated" if existing else "created"
+        return row
+
+    def deregister_account(self, node_id: str, account_id: str) -> bool:
+        return self.db.delete_account(node_id, account_id)
+
+    def accounts(self, node_id: str | None = None) -> list[dict[str, Any]]:
+        return self.db.list_accounts(node_id)

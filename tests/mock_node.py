@@ -29,6 +29,9 @@ STATE: dict = {
 }
 _lock = threading.Lock()
 
+# 模拟节点 v1.11.0 鉴权:设了则所有请求需 X-Admin-Token == REQUIRE_TOKEN,否则 401。
+REQUIRE_TOKEN: str | None = None
+
 # 极简 SSE 总线,用于测试节点 -> Admin 的事件触发重拉
 _SUBS: set = set()
 _SUBS_LOCK = threading.Lock()
@@ -99,7 +102,16 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _auth(self) -> bool:
+        """模拟 v1.11.0 入站鉴权:设了 REQUIRE_TOKEN 则需匹配,否则 401。"""
+        if REQUIRE_TOKEN and self.headers.get("X-Admin-Token") != REQUIRE_TOKEN:
+            self._json({"error": "unauthorized: bad token"}, 401)
+            return False
+        return True
+
     def do_GET(self):
+        if not self._auth():
+            return
         p = self.path.split("?")[0]
         if p == "/api/health":
             return self._json({"status": "ok", "database": ":memory:"})
@@ -143,6 +155,8 @@ class Handler(BaseHTTPRequestHandler):
                 _SUBS.discard(q)
 
     def do_POST(self):
+        if not self._auth():
+            return
         length = int(self.headers.get("Content-Length") or 0)
         payload = json.loads(self.rfile.read(length) or b"{}")
         if self.path == "/api/accounts":

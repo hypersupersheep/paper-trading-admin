@@ -72,6 +72,46 @@ class TestRegistry(unittest.TestCase):
         self.assertRegex(node["id"], r"^[A-Za-z0-9._-]+$")
 
 
+class TestAccountRegistry(unittest.TestCase):
+    """账户级登记:单条 / 批量 / 幂等 / owner 回退 / 注销。"""
+
+    def _reg(self):
+        return Registry(_tmp_db("acct.db"))
+
+    NODE = {"id": "alice-mbp", "name": "Alice", "base_url": "http://10.0.0.5:8000"}
+
+    def test_register_single_and_owner_fallback(self):
+        reg = self._reg()
+        out = reg.register_accounts({"node": self.NODE,
+                                     "account": {"id": "acct_1", "name": "主账户"}})
+        self.assertEqual(out["node_id"], "alice-mbp")
+        self.assertEqual(out["accounts"][0]["_action"], "created")
+        self.assertEqual(out["accounts"][0]["owner"], "主账户")  # 缺 owner → 回退账户名
+        self.assertIsNotNone(reg.db.get_node("alice-mbp"))       # 节点也被 upsert
+
+    def test_register_bulk_and_idempotent(self):
+        reg = self._reg()
+        reg.register_accounts({"node": self.NODE, "accounts": [
+            {"id": "a1", "owner": "Alice"}, {"id": "a2", "owner": "Alice"}]})
+        self.assertEqual(len(reg.accounts("alice-mbp")), 2)
+        again = reg.register_accounts({"node": self.NODE,
+                                       "account": {"id": "a1", "owner": "Alice"}})
+        self.assertEqual(again["accounts"][0]["_action"], "updated")
+        self.assertEqual(len(reg.accounts("alice-mbp")), 2)  # 幂等,不增
+
+    def test_missing_account_id_rejected(self):
+        reg = self._reg()
+        with self.assertRaises(ValueError):
+            reg.register_accounts({"node": self.NODE, "account": {"owner": "x"}})
+
+    def test_deregister(self):
+        reg = self._reg()
+        reg.register_accounts({"node": self.NODE, "account": {"id": "a1"}})
+        self.assertTrue(reg.deregister_account("alice-mbp", "a1"))
+        self.assertFalse(reg.deregister_account("alice-mbp", "a1"))  # 再删 → False
+        self.assertEqual(reg.accounts("alice-mbp"), [])
+
+
 class TestAlertEngine(unittest.TestCase):
     """模拟盘只做连通性告警:离线 / 恢复,边沿触发,不重复刷屏。"""
 
@@ -108,6 +148,9 @@ class TestPollerIntegration(unittest.TestCase):
             reg = Registry(db)
             reg.register({"id": "mock", "name": "Mock", "base_url": "http://127.0.0.1:8731",
                           "data_source": "mock"})
+            # 登记节点里的账户,才会进入账户级监控
+            reg.register_accounts({"node": {"id": "mock", "base_url": "http://127.0.0.1:8731"},
+                                   "account": {"id": "acct_mock", "owner": "Mock", "name": "Mock 账户"}})
             poller = Poller(cfg, db, reg, AlertEngine(cfg))
             poller.poll_once()
 
@@ -120,9 +163,17 @@ class TestPollerIntegration(unittest.TestCase):
             self.assertGreaterEqual(len(db.samples("mock")), 1)
 
             ov = build_overview(db, reg)
-            self.assertEqual(ov["totals"]["online"], 1)
-            self.assertEqual(ov["leaderboard"][0]["id"], "mock")
-            self.assertTrue(ov["nodes"][0]["spark"])  # 有 sparkline 数据
+            self.assertEqual(ov["totals"]["node_online"], 1)
+            self.assertEqual(ov["totals"]["online"], 1)          # 1 个在线账户
+            acct = ov["accounts"][0]
+            self.assertEqual(acct["account_id"], "acct_mock")
+            self.assertEqual(acct["status"], "online")
+            self.assertAlmostEqual(acct["pnl_pct"], 0.05)
+            self.assertEqual(acct["owner"], "Mock")
+            self.assertEqual(acct["position_count"], 2)          # 从 summary 的 positions 数
+            self.assertTrue(acct["spark"])                        # 账户级 sparkline
+            self.assertEqual(ov["leaderboard"][0]["account_id"], "acct_mock")
+            self.assertTrue(ov["nodes"][0]["spark"])             # 节点级 sparkline 仍在
         finally:
             httpd.shutdown()
 
@@ -187,6 +238,42 @@ class TestNodeSSE(unittest.TestCase):
                 time.sleep(0.05)
             mgr.stop()
             self.assertEqual(fired[:1], ["sse1"])
+        finally:
+            httpd.shutdown()
+
+
+class TestNodeTokenAuth(unittest.TestCase):
+    """节点 v1.11.0 鉴权:Admin 轮询 / 反控必须带 X-Admin-Token = node.token。
+    用强制校验 token 的 mock 节点确证 poller 与 control 真的带上了 token。"""
+
+    def setUp(self):
+        mock_node.REQUIRE_TOKEN = "node-secret-xyz"
+
+    def tearDown(self):
+        mock_node.REQUIRE_TOKEN = None
+
+    def test_poller_and_control_carry_node_token(self):
+        httpd = mock_node.serve(8736)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            db = _tmp_db("auth.db"); cfg = Config(poll_timeout=2.0)
+            reg = Registry(db)
+            # 带正确 node.token 登记
+            reg.register({"id": "n", "name": "N", "base_url": "http://127.0.0.1:8736",
+                          "token": "node-secret-xyz", "data_source": "mock"})
+            reg.register_accounts({"node": {"id": "n", "base_url": "http://127.0.0.1:8736",
+                                            "token": "node-secret-xyz"},
+                                   "account": {"id": "acct_mock", "owner": "N"}})
+            poller = Poller(cfg, db, reg, AlertEngine(cfg))
+            poller.poll_once()
+            self.assertEqual(db.get_state("n")["status"], "online")  # 带 token 才能 200
+
+            # 把 token 改错 → 轮询应被节点 401 → 离线(证明 token 是真在用、且必需)
+            reg.register({"id": "n", "base_url": "http://127.0.0.1:8736", "token": "WRONG",
+                          "data_source": "mock"})
+            poller.poll_once()  # degraded
+            poller.poll_once()  # offline
+            self.assertEqual(db.get_state("n")["status"], "offline")
         finally:
             httpd.shutdown()
 

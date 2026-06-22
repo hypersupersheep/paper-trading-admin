@@ -198,6 +198,17 @@ class Poller:
                 "day_pnl": state["day_pnl"], "exposure": state["exposure"],
                 "position_count": state["position_count"],
             })
+            # 账户级时序:只采**已登记**账户(账户卡的 sparkline)
+            registered = {a["account_id"] for a in self.registry.accounts(node_id)}
+            for acct in accounts:
+                aid = acct.get("id")
+                if aid in registered:
+                    self.db.add_account_sample({
+                        "node_id": node_id, "account_id": aid, "ts": now,
+                        "equity": _num(acct.get("equity")), "pnl": _num(acct.get("pnl")),
+                        "pnl_pct": _num(acct.get("pnl_pct")), "day_pnl": _num(acct.get("day_pnl")),
+                        "exposure": _num(acct.get("exposure")),
+                    })
 
         for alert in self.engine.evaluate(node_id, name, state):
             self.db.add_alert(alert)
