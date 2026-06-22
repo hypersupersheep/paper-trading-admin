@@ -1,6 +1,6 @@
 """节点 SSE 消费者(Phase 3b)。
 
-为每个启用的节点起一条后台线程,连它的 `GET /api/events/stream`;收到任何变更信号就
+为每个启用的节点起一条后台线程,连它的 `GET /api/stream`;收到任何变更信号就
 回调 on_event(node_id) —— 由 Poller.repoll 立即重拉该节点,实现成交秒级上墙。
 
 设计取舍:
@@ -22,7 +22,7 @@ from typing import Any, Callable
 from .config import Config
 from .registry import Registry
 
-SSE_PATH = "/api/events/stream"
+SSE_PATH = "/api/stream"  # 节点 v1.12.0 的 SSE 端点
 SSE_DEBOUNCE = 0.3          # 秒:重拉去抖窗口
 RETRY_NO_SSE = 60.0        # 节点不支持 SSE 时的重试间隔
 RETRY_ERROR = 5.0          # 其它连接错误的重试间隔

@@ -222,24 +222,28 @@ class TestEventBus(unittest.TestCase):
 class TestNodeSSE(unittest.TestCase):
     """节点推 SSE 信号 → Admin 消费者触发 on_event(立即重拉)。"""
 
-    def test_consumer_fires_on_node_event(self):
+    def test_consumer_connects_with_token_and_fires_on_event(self):
+        # 节点 v1.12.0:/api/stream 走入站鉴权。强制 token → 同时验证消费者 SSE 连接带了 node.token。
+        mock_node.REQUIRE_TOKEN = "sse-tok"
         httpd = mock_node.serve(8733)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         fired: list[str] = []
         try:
             reg = Registry(_tmp_db("sse.db"))
-            reg.register({"id": "sse1", "name": "SSE1", "base_url": "http://127.0.0.1:8733"})
+            reg.register({"id": "sse1", "name": "SSE1", "base_url": "http://127.0.0.1:8733",
+                          "token": "sse-tok"})  # 不带 token,/api/stream 会 401 → 永不触发
             mgr = NodeSSEManager(Config(), reg, on_event=lambda nid: fired.append(nid))
             mgr._reconcile()  # 直接起消费者,免等 5s 监督周期
-            time.sleep(0.5)   # 等 SSE 连上
-            mock_node.emit("trade")  # 节点广播变更信号
+            time.sleep(0.5)   # 等 SSE 连上(带 token 才能连上)
+            mock_node.emit("trade_filled")  # 节点推 data: 事件
             deadline = time.time() + 3.0
             while not fired and time.time() < deadline:
                 time.sleep(0.05)
             mgr.stop()
-            self.assertEqual(fired[:1], ["sse1"])
+            self.assertEqual(fired[:1], ["sse1"])  # 连上了 + data: 事件触发了重拉
         finally:
             httpd.shutdown()
+            mock_node.REQUIRE_TOKEN = None
 
 
 class TestNodeTokenAuth(unittest.TestCase):

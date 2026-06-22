@@ -118,13 +118,13 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/api/meta":
             return self._json({"name": STATE["name"], "version": "1.7.0", "api_version": 1,
                                "data_sources": ["mock"], "default_data_source": "mock",
-                               "capabilities": {"accounts": True}})
+                               "capabilities": {"accounts": True, "event_stream": True}})
         if p == "/api/portfolio/summary":
             with _lock:
                 return self._json(_summary())
         if p == "/api/audit/trades":
             return self._json(_trades())
-        if p == "/api/events/stream":
+        if p == "/api/stream":
             return self._sse()
         return self._json({"error": "not found"}, 404)
 
@@ -138,15 +138,15 @@ class Handler(BaseHTTPRequestHandler):
         with _SUBS_LOCK:
             _SUBS.add(q)
         try:
-            self.wfile.write(b"event: hello\ndata: {}\n\n")
+            self.wfile.write(b": connected\n\n")  # 注释行,消费者应忽略
             self.wfile.flush()
             while True:
                 try:
                     evt = q.get(timeout=10.0)
-                    self.wfile.write(f"event: change\ndata: {json.dumps(evt)}\n\n".encode())
+                    self.wfile.write(f"data: {json.dumps(evt)}\n\n".encode())  # 事件:data: 行
                     self.wfile.flush()
                 except queue.Empty:
-                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.write(b": ping\n\n")  # 心跳:注释行,消费者应忽略
                     self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
