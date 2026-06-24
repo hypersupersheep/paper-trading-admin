@@ -157,12 +157,16 @@ def build_handler(services: Services) -> type[BaseHTTPRequestHandler]:
         # ---- 工具 ----
         def _json(self, payload: Any, status: HTTPStatus = HTTPStatus.OK) -> None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionError):
+                # 浏览器在响应写完前断开(刷新/切走/SSE 重连),正常现象,静默放弃
+                self.close_connection = True
 
         def _read_json(self) -> dict[str, Any]:
             length = int(self.headers.get("Content-Length") or 0)
@@ -221,6 +225,8 @@ def build_handler(services: Services) -> type[BaseHTTPRequestHandler]:
                     self._node_detail(node_id)
                     return
                 self._static(path)
+            except (BrokenPipeError, ConnectionError):
+                self.close_connection = True   # 客户端断开,无需也无法回错
             except ValueError as exc:
                 self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             except Exception as exc:  # noqa: BLE001
@@ -276,6 +282,8 @@ def build_handler(services: Services) -> type[BaseHTTPRequestHandler]:
                     self._json({"acknowledged": alert_id})
                     return
                 self._json({"error": f"未知端点: {path}"}, HTTPStatus.NOT_FOUND)
+            except (BrokenPipeError, ConnectionError):
+                self.close_connection = True   # 客户端断开,无需也无法回错
             except ValueError as exc:
                 self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             except Exception as exc:  # noqa: BLE001
