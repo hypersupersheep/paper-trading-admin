@@ -39,7 +39,7 @@ main { display: grid; grid-template-columns: 1fr 320px; gap: 16px; padding: 16px
   padding: 12px 14px; cursor: pointer; transition: border-color .15s; position: relative;
 }
 .card:hover { border-color: var(--accent); }
-.card.offline { opacity: .65; }
+.card.offline { opacity: .85; border-style: dashed; }
 .card .head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .card .name { font-weight: 600; font-size: 15px; }
 .acct-sub { font-size: 12px; color: var(--muted); margin: -2px 0 4px 17px; }
@@ -79,6 +79,8 @@ main { display: grid; grid-template-columns: 1fr 320px; gap: 16px; padding: 16px
 
 /* 弹窗 */
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
+/* hidden 属性必须真正隐藏弹窗:.modal-backdrop 的 display:flex 会盖掉 [hidden] 的 display:none,这里用更高优先级修正 */
+.modal-backdrop[hidden] { display: none; }
 .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; width: min(860px, 92vw); max-height: 88vh; display: flex; flex-direction: column; }
 .modal.narrow { width: min(440px, 92vw); }
 .modal-head { display: flex; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--border); }
