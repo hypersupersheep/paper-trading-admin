@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Paper Trading Admin · 实时监控墙</title>
+  <title>白教头量化中台 · Portfolio Manager</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <div class="ticker" id="ticker"><div class="ticker-track" id="ticker-track"></div></div>
+  <div class="ticker" id="ticker" aria-hidden="true"><div class="ticker-track" id="ticker-track"></div></div>
 
   <header class="topbar">
     <div class="brand">
-      <span class="logo">▦</span>
-      <span>白教头<strong>量化中台</strong></span>
-      <span class="pill" id="conn">连接中…</span>
+      <span class="logo" aria-hidden="true">白</span>
+      <h1 class="brand-name">白教头<strong>量化中台</strong></h1>
+      <span class="pill" id="conn" role="status" aria-live="polite">连接中…</span>
     </div>
     <div class="totals" id="totals"></div>
     <div class="actions">
@@ -24,7 +24,7 @@
           <option value="5000">5s</option>
         </select>
       </label>
-      <button id="add-node">+ 添加节点</button>
+      <button id="add-node" type="button">+ 添加节点</button>
     </div>
   </header>
 
@@ -50,7 +50,7 @@
     <div class="modal">
       <div class="modal-head">
         <h3 id="modal-title"></h3>
-        <button class="close" id="modal-close">×</button>
+        <button class="close" id="modal-close" type="button" aria-label="关闭">×</button>
       </div>
       <div class="modal-body" id="modal-body"></div>
     </div>
@@ -61,7 +61,7 @@
     <div class="modal narrow">
       <div class="modal-head">
         <h3 id="form-title"></h3>
-        <button class="close" id="form-close">×</button>
+        <button class="close" id="form-close" type="button" aria-label="关闭">×</button>
       </div>
       <div class="modal-body" id="form-body"></div>
     </div>

@@ -47,9 +47,10 @@ function sparkline(values) {
   const min = Math.min(...values), max = Math.max(...values), range = max - min || 1;
   const step = (w - pad * 2) / (values.length - 1);
   const pts = values.map((v, i) => `${(pad + i * step).toFixed(1)},${(h - pad - ((v - min) / range) * (h - pad * 2)).toFixed(1)}`).join(" ");
-  const color = values[values.length - 1] >= values[0] ? "var(--up)" : "var(--down)";
-  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
-    <polyline fill="none" stroke="${color}" stroke-width="1.5" points="${pts}" /></svg>`;
+  // A股口径:走高=红(up),走低=绿(down)。用 currentColor + 类着色(SVG 属性里 var() 不生效)
+  const cls = values[values.length - 1] >= values[0] ? "up" : "down";
+  return `<svg class="spark ${cls}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <polyline fill="none" stroke="currentColor" stroke-width="1.5" points="${pts}" /></svg>`;
 }
 
 // ---- 渲染:监控墙 -------------------------------------------------------
@@ -64,7 +65,7 @@ function fmtSigned(v, kind) {
 
 // ---- 顶部滚动横条 -------------------------------------------------------
 function tickerItem(label, value, cls) {
-  return `<span class="tk"><b>${label}</b><span class="${cls || ""}">${value}</span></span>`;
+  return `<span class="tk"><b>${label}</b><span class="tk-val ${cls || ""}">${value}</span></span>`;
 }
 
 function buildTickerItems(d) {
@@ -157,9 +158,19 @@ function renderWall(accounts, nodes) {
     const nodeStatus = node.status || (accts.some((a) => a.status === "online") ? "online" : "offline");
     const group = el("section", "node-group");
     const head = el("div", "node-header");
-    head.innerHTML = `<span class="dot ${nodeStatus}"></span>
+    // 本席汇总盈亏(仅统计有数值的账户)
+    const valid = accts.filter((a) => a.pnl != null && a.equity != null);
+    let deskHtml = "";
+    if (valid.length) {
+      const dp = valid.reduce((s, a) => s + a.pnl, 0);
+      const db = valid.reduce((s, a) => s + (a.equity - a.pnl), 0);
+      const dr = db > 0 ? dp / db : null;
+      deskHtml = `<span class="desk-pnl ${signClass(dp)}">${fmtSigned(dp)}${dr != null ? "&nbsp;·&nbsp;" + fmtSigned(dr, "pct") : ""}</span>`;
+    }
+    head.innerHTML = `<span class="dot ${nodeStatus}" aria-hidden="true"></span>
       <span class="mname">${machineName}</span>
-      <small>${accts.length} 个账户${nodeStatus !== "online" ? " · " + (STATUS_LABEL[nodeStatus] || nodeStatus) : ""}</small>`;
+      <span class="meta">${accts.length} 个账户${nodeStatus !== "online" ? " · " + (STATUS_LABEL[nodeStatus] || nodeStatus) : ""}</span>
+      ${deskHtml}`;
     group.appendChild(head);
     const grid = el("div", "grid");
     for (const a of accts) grid.appendChild(accountCard(a));
@@ -170,25 +181,32 @@ function renderWall(accounts, nodes) {
 
 // 单张账户卡:账户名为主、交易员(owner)为辅
 function accountCard(a) {
-  const card = el("div", "card " + (a.status === "offline" ? "offline" : ""));
+  const edge = a.pnl_pct == null ? "" : a.pnl_pct > 0 ? " up-edge" : a.pnl_pct < 0 ? " down-edge" : "";
+  const card = el("div", "card" + (a.status === "offline" ? " offline" : "") + edge);
   const note = a.status !== "online"
     ? `<span class="stale">${STATUS_LABEL[a.status] || a.status}${a.last_ok_at ? " · " + ago(a.last_ok_at) : ""}</span>` : "";
   card.innerHTML = `
     <div class="head">
-      <span class="dot ${a.status === "missing" ? "degraded" : a.status}"></span>
+      <span class="dot ${a.status === "missing" ? "degraded" : a.status}" aria-hidden="true"></span>
       <span class="name">${a.name}</span>
       ${note}
     </div>
     ${a.owner && a.owner !== a.name ? `<div class="acct-sub">${a.owner}</div>` : ""}
     <div class="metrics">
-      <div class="metric"><span>总收益率</span><b class="${signClass(a.pnl_pct)}">${fmtPct(a.pnl_pct)}</b></div>
-      <div class="metric"><span>当日盈亏</span><b class="${signClass(a.day_pnl)}">${fmtMoney(a.day_pnl)}</b></div>
+      <div class="metric lead"><span>总收益率</span><b class="${signClass(a.pnl_pct)}">${fmtSigned(a.pnl_pct, "pct")}</b></div>
+      <div class="metric"><span>当日盈亏</span><b class="${signClass(a.day_pnl)}">${fmtSigned(a.day_pnl)}</b></div>
       <div class="metric"><span>净值</span><b>${fmtMoney(a.equity)}</b></div>
       <div class="metric"><span>仓位</span><b>${fmtPct(a.exposure)}</b></div>
     </div>
     ${sparkline(a.spark)}
-    <div class="foot"><span></span><span>${a.position_count ?? "—"} 持仓</span></div>`;
-  card.onclick = () => openAccount(a.node_id, a.account_id, a.owner, a.name);
+    <div class="foot"><span>${a.owner || ""}</span><span>${a.position_count ?? "—"} 持仓</span></div>`;
+  const open = () => openAccount(a.node_id, a.account_id, a.owner, a.name);
+  card.setAttribute("role", "button");
+  card.setAttribute("tabindex", "0");
+  card.setAttribute("aria-label",
+    `${a.owner || a.name} 账户 ${a.name},${a.status === "online" ? "在线" : STATUS_LABEL[a.status] || a.status},总收益率 ${fmtPct(a.pnl_pct)}`);
+  card.onclick = open;
+  card.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } };
   return card;
 }
 
@@ -212,7 +230,7 @@ function renderAlerts(rows) {
   for (const a of rows) {
     const li = el("li", a.severity);
     li.innerHTML = `<div class="amsg">${a.message}<div class="ats">${ago(a.ts)}</div></div>
-      <button class="ack" data-id="${a.id}">确认</button>`;
+      <button class="ack" type="button" data-id="${a.id}">确认</button>`;
     li.querySelector(".ack").onclick = async (e) => {
       e.stopPropagation();
       await api("POST", `/api/admin/alerts/${a.id}/ack`);
@@ -292,12 +310,12 @@ function showForm(title, bodyHtml) {
 
 function addNodeForm() {
   showForm("添加节点", `
-    <div class="form-row"><label>显示名</label><input id="f-name" placeholder="Alice"></div>
-    <div class="form-row"><label>节点地址 base_url</label><input id="f-url" placeholder="http://192.168.1.23:8000"></div>
-    <div class="form-row"><label>数据源 data_source(可空,自动取节点默认)</label><input id="f-ds" placeholder="akshare"></div>
-    <div class="form-row"><label>节点 token(可空)</label><input id="f-token" placeholder="admin-token"></div>
-    <div id="f-msg"></div>
-    <div class="form-actions"><button class="btn-primary" id="f-submit">添加</button></div>`);
+    <div class="form-row"><label for="f-name">显示名</label><input id="f-name" name="name" placeholder="如 Alice…" autocomplete="off"></div>
+    <div class="form-row"><label for="f-url">节点地址 base_url</label><input id="f-url" name="base_url" type="url" inputmode="url" placeholder="如 http://192.168.1.23:8000…" autocomplete="off" spellcheck="false"></div>
+    <div class="form-row"><label for="f-ds">数据源 data_source(可空,自动取节点默认)</label><input id="f-ds" name="data_source" placeholder="如 tongdaxin…" autocomplete="off" spellcheck="false"></div>
+    <div class="form-row"><label for="f-token">节点 token(可空)</label><input id="f-token" name="token" placeholder="如 admin-token…" autocomplete="off" spellcheck="false"></div>
+    <div id="f-msg" aria-live="polite"></div>
+    <div class="form-actions"><button class="btn-primary" id="f-submit" type="button">添加</button></div>`);
   $("#f-submit").onclick = async () => {
     try {
       await api("POST", "/api/admin/nodes", {
@@ -312,10 +330,10 @@ function addNodeForm() {
 
 function openAccountForm(nodeId, name) {
   showForm(`远程开户 → ${name}`, `
-    <div class="form-row"><label>账户名</label><input id="a-name" placeholder="新同事"></div>
-    <div class="form-row"><label>初始资金</label><input id="a-cash" type="number" value="10000000"></div>
-    <div id="a-msg"></div>
-    <div class="form-actions"><button class="btn-primary" id="a-submit">提交开户</button></div>`);
+    <div class="form-row"><label for="a-name">账户名</label><input id="a-name" name="account_name" placeholder="如 新同事…" autocomplete="off"></div>
+    <div class="form-row"><label for="a-cash">初始资金</label><input id="a-cash" name="initial_cash" type="number" inputmode="numeric" min="0" value="10000000"></div>
+    <div id="a-msg" aria-live="polite"></div>
+    <div class="form-actions"><button class="btn-primary" id="a-submit" type="button">提交开户</button></div>`);
   $("#a-submit").onclick = async () => {
     try {
       const r = await api("POST", `/api/admin/nodes/${nodeId}/control`, {
@@ -374,6 +392,9 @@ $("#modal-close").onclick = () => ($("#modal").hidden = true);
 $("#form-close").onclick = () => ($("#form-modal").hidden = true);
 $("#modal").onclick = (e) => { if (e.target.id === "modal") $("#modal").hidden = true; };
 $("#form-modal").onclick = (e) => { if (e.target.id === "form-modal") $("#form-modal").hidden = true; };
+document.addEventListener("keydown", (e) => {  // Esc 关闭任意打开的弹窗
+  if (e.key === "Escape") { $("#modal").hidden = true; $("#form-modal").hidden = true; }
+});
 
 refresh();      // 首屏立即拉一份
 connectSSE();   // 之后由 SSE 推送驱动,断连自动退回轮询
