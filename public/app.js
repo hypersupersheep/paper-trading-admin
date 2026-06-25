@@ -63,42 +63,68 @@ function renderTotals(t) {
     <div class="kv"><b>${t.node_online}/${t.node_count}</b><span>在线节点</span></div>`;
 }
 
-function renderWall(accounts) {
+const STATUS_RANK = { online: 0, degraded: 1, missing: 2, unknown: 3, offline: 4 };
+
+// 监控墙:按机器(节点)分组 —— 一台机器一个小标题,其下一排该机器的账户卡
+function renderWall(accounts, nodes) {
   const wall = $("#wall");
   wall.innerHTML = "";
   if (!accounts.length) {
-    wall.appendChild(el("div", "empty", "还没有已登记账户。节点开户并接入 Admin 后,账户会自动登记上墙。"));
+    wall.appendChild(el("div", "empty", "还没有已登记账户。节点接入并开户后,账户会自动登记上墙。"));
     return;
   }
-  // 按 owner、再按账户名排序(同一交易员的账户相邻)
-  const rows = [...accounts].sort((a, b) =>
-    (a.owner || "").localeCompare(b.owner || "") || (a.name || "").localeCompare(b.name || ""));
-  for (const a of rows) {
-    const card = el("div", "card " + (a.status === "offline" ? "offline" : ""));
-    const note = a.status !== "online"
-      ? `<span class="stale">${STATUS_LABEL[a.status] || a.status}${a.last_ok_at ? " · " + ago(a.last_ok_at) : ""}</span>`
-      : `<span class="ds">${a.node_name}</span>`;
-    card.innerHTML = `
-      <div class="head">
-        <span class="dot ${a.status === "missing" ? "degraded" : a.status}"></span>
-        <span class="name">${a.owner}</span>
-        ${note}
-      </div>
-      <div class="acct-sub">${a.name}</div>
-      <div class="metrics">
-        <div class="metric"><span>总收益率</span><b class="${signClass(a.pnl_pct)}">${fmtPct(a.pnl_pct)}</b></div>
-        <div class="metric"><span>当日盈亏</span><b class="${signClass(a.day_pnl)}">${fmtMoney(a.day_pnl)}</b></div>
-        <div class="metric"><span>净值</span><b>${fmtMoney(a.equity)}</b></div>
-        <div class="metric"><span>仓位</span><b>${fmtPct(a.exposure)}</b></div>
-      </div>
-      ${sparkline(a.spark)}
-      <div class="foot">
-        <span>${a.node_name}</span>
-        <span>${a.position_count ?? "—"} 持仓</span>
-      </div>`;
-    card.onclick = () => openAccount(a.node_id, a.account_id, a.owner, a.name);
-    wall.appendChild(card);
+  const nodeMap = {};
+  for (const n of nodes || []) nodeMap[n.id] = n;
+  // 按 node_id 归组
+  const groups = {};
+  for (const a of accounts) (groups[a.node_id] ||= []).push(a);
+  // 机器排序:在线优先,再按机器名
+  const nodeIds = Object.keys(groups).sort((x, y) => {
+    const sx = (nodeMap[x] || {}).status, sy = (nodeMap[y] || {}).status;
+    return (STATUS_RANK[sx] ?? 3) - (STATUS_RANK[sy] ?? 3)
+      || (groups[x][0].node_name || "").localeCompare(groups[y][0].node_name || "");
+  });
+
+  for (const nid of nodeIds) {
+    const accts = groups[nid].sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+    const node = nodeMap[nid] || {};
+    const machineName = accts[0].node_name || nid;
+    const nodeStatus = node.status || (accts.some((a) => a.status === "online") ? "online" : "offline");
+    const group = el("section", "node-group");
+    const head = el("div", "node-header");
+    head.innerHTML = `<span class="dot ${nodeStatus}"></span>
+      <span class="mname">${machineName}</span>
+      <small>${accts.length} 个账户${nodeStatus !== "online" ? " · " + (STATUS_LABEL[nodeStatus] || nodeStatus) : ""}</small>`;
+    group.appendChild(head);
+    const grid = el("div", "grid");
+    for (const a of accts) grid.appendChild(accountCard(a));
+    group.appendChild(grid);
+    wall.appendChild(group);
   }
+}
+
+// 单张账户卡:账户名为主、交易员(owner)为辅
+function accountCard(a) {
+  const card = el("div", "card " + (a.status === "offline" ? "offline" : ""));
+  const note = a.status !== "online"
+    ? `<span class="stale">${STATUS_LABEL[a.status] || a.status}${a.last_ok_at ? " · " + ago(a.last_ok_at) : ""}</span>` : "";
+  card.innerHTML = `
+    <div class="head">
+      <span class="dot ${a.status === "missing" ? "degraded" : a.status}"></span>
+      <span class="name">${a.name}</span>
+      ${note}
+    </div>
+    ${a.owner && a.owner !== a.name ? `<div class="acct-sub">${a.owner}</div>` : ""}
+    <div class="metrics">
+      <div class="metric"><span>总收益率</span><b class="${signClass(a.pnl_pct)}">${fmtPct(a.pnl_pct)}</b></div>
+      <div class="metric"><span>当日盈亏</span><b class="${signClass(a.day_pnl)}">${fmtMoney(a.day_pnl)}</b></div>
+      <div class="metric"><span>净值</span><b>${fmtMoney(a.equity)}</b></div>
+      <div class="metric"><span>仓位</span><b>${fmtPct(a.exposure)}</b></div>
+    </div>
+    ${sparkline(a.spark)}
+    <div class="foot"><span></span><span>${a.position_count ?? "—"} 持仓</span></div>`;
+  card.onclick = () => openAccount(a.node_id, a.account_id, a.owner, a.name);
+  return card;
 }
 
 function renderLeaderboard(rows) {
@@ -107,7 +133,7 @@ function renderLeaderboard(rows) {
   if (!rows.length) { lb.appendChild(el("li", "empty", "暂无在线数据")); return; }
   for (const r of rows) {
     const li = el("li");
-    li.innerHTML = `<span class="lname">${r.owner}<small>${r.name && r.name !== r.owner ? " · " + r.name : ""}</small></span>
+    li.innerHTML = `<span class="lname">${r.name}<small>${r.owner && r.owner !== r.name ? " · " + r.owner : ""}</small></span>
       <span class="lpct ${signClass(r.pnl_pct)}">${fmtPct(r.pnl_pct)}</span>`;
     lb.appendChild(li);
   }
@@ -239,7 +265,7 @@ function openAccountForm(nodeId, name) {
 // ---- 主循环:优先 SSE 推送,断连时退回轮询 -------------------------------
 function renderAll(d) {
   renderTotals(d.totals);
-  renderWall(d.accounts || []);
+  renderWall(d.accounts || [], d.nodes || []);
   renderLeaderboard(d.leaderboard);
   renderAlerts(d.alerts);
 }

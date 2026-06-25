@@ -32,6 +32,12 @@ main { display: grid; grid-template-columns: 1fr 320px; gap: 16px; padding: 16px
 .right { display: flex; flex-direction: column; gap: 16px; }
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
 
+/* 监控墙:按机器分组 */
+.node-group { margin-bottom: 20px; }
+.node-header { display: flex; align-items: center; gap: 9px; padding: 2px 2px 9px; margin-bottom: 11px; border-bottom: 1px solid var(--border); }
+.node-header .mname { font-size: 16px; font-weight: 600; }
+.node-header small { color: var(--muted); margin-left: auto; font-size: 12px; }
+
 /* 监控墙卡片 */
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
 .card {
