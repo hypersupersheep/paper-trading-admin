@@ -176,6 +176,8 @@ class Database:
             conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
             conn.execute("DELETE FROM node_state WHERE node_id = ?", (node_id,))
             conn.execute("DELETE FROM equity_samples WHERE node_id = ?", (node_id,))
+            conn.execute("DELETE FROM account_samples WHERE node_id = ?", (node_id,))
+            conn.execute("DELETE FROM accounts WHERE node_id = ?", (node_id,))  # 连带账户,避免孤儿
 
     # ---- accounts(账户级登记)------------------------------------------
     def upsert_account(self, account: dict[str, Any]) -> None:

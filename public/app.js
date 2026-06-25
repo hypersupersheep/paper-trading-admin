@@ -80,39 +80,23 @@ function tickerItem(label, value, cls) {
 }
 
 function buildTickerItems(d) {
+  // 模型:一个交易员 = 一台电脑 = 一个节点(可含多账户/多策略)
   const t = d.totals || {};
   const online = (d.accounts || []).filter((a) => a.status === "online");
   const out = [];
-  out.push(tickerItem("节点", `${t.node_online}/${t.node_count} 在线`));
-  const owners = new Set(online.map((a) => a.owner).filter(Boolean));
-  out.push(tickerItem("在线交易员", `${owners.size} 人`));
+  out.push(tickerItem("在线交易员", `${t.node_online}/${t.node_count} 人`));   // 交易员=节点
   out.push(tickerItem("在线账户", `${t.online}/${t.account_count}`));
   out.push(tickerItem("总净值", fmtMoney(t.equity)));
   out.push(tickerItem("总盈亏", fmtSigned(t.pnl), signClass(t.pnl)));
 
   if (online.length) {
-    // 最佳交易员:按 owner 聚合收益率 = Σpnl / Σ(本金),本金 = 净值 - 盈亏
-    const agg = {};
-    for (const a of online) {
-      const o = a.owner || a.name;
-      const e = (agg[o] ||= { pnl: 0, base: 0 });
-      e.pnl += a.pnl || 0;
-      e.base += (a.equity || 0) - (a.pnl || 0);
-    }
-    let bo = null, br = -Infinity;
-    for (const [o, e] of Object.entries(agg)) {
-      const r = e.base > 0 ? e.pnl / e.base : 0;
-      if (r > br) { br = r; bo = o; }
-    }
-    if (bo !== null) out.push(tickerItem("最佳交易员", `${bo} ${fmtSigned(br, "pct")}`, signClass(br)));
-
-    // 最佳策略:单账户最高累计收益率
     const byPct = online.filter((a) => a.pnl_pct != null).sort((x, y) => y.pnl_pct - x.pnl_pct);
     if (byPct.length) {
-      const a = byPct[0];
-      out.push(tickerItem("最佳策略", `${a.name} ${fmtSigned(a.pnl_pct, "pct")}`, signClass(a.pnl_pct)));
+      const best = byPct[0];
+      // 最佳交易员 = 最佳策略所属的那个交易员(节点),如 Sheep
+      out.push(tickerItem("最佳交易员", `${best.node_name} ${fmtSigned(best.pnl_pct, "pct")}`, signClass(best.pnl_pct)));
+      out.push(tickerItem("最佳策略", `${best.name} ${fmtSigned(best.pnl_pct, "pct")}`, signClass(best.pnl_pct)));
     }
-    // 本日最佳 / 本日最差:按当日盈亏
     const byDay = online.filter((a) => a.day_pnl != null).sort((x, y) => y.day_pnl - x.day_pnl);
     if (byDay.length) {
       const top = byDay[0];
@@ -178,10 +162,18 @@ function renderWall(accounts, nodes) {
       const dr = db > 0 ? dp / db : null;
       deskHtml = `<span class="desk-pnl ${signClass(dp)}">${fmtSigned(dp)}${dr != null ? "&nbsp;·&nbsp;" + fmtSigned(dr, "pct") : ""}</span>`;
     }
+    const offline = nodeStatus !== "online";
     head.innerHTML = `<span class="dot ${nodeStatus}" aria-hidden="true"></span>
       <span class="mname">${machineName}</span>
-      <span class="meta">${accts.length} 个账户${nodeStatus !== "online" ? " · " + (STATUS_LABEL[nodeStatus] || nodeStatus) : ""}</span>
-      ${deskHtml}`;
+      <span class="meta">${accts.length} 个账户${offline ? " · " + (STATUS_LABEL[nodeStatus] || nodeStatus) : ""}</span>
+      ${deskHtml}
+      ${offline ? `<button class="node-del" type="button" title="从监控墙移除该离线节点">✕ 移除</button>` : ""}`;
+    const delBtn = head.querySelector(".node-del");
+    if (delBtn) delBtn.onclick = async () => {
+      if (!confirm(`从监控墙移除离线节点「${machineName}」及其账户?(不影响该机器本身,它重新上线会自动回来)`)) return;
+      try { await api("POST", `/api/admin/nodes/${encodeURIComponent(nid)}/delete`); refresh(); }
+      catch (e) { alert("移除失败:" + e.message); }
+    };
     group.appendChild(head);
     const grid = el("div", "grid");
     for (const a of accts) grid.appendChild(accountCard(a));

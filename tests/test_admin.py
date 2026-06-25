@@ -345,6 +345,15 @@ class TestHardening(unittest.TestCase):
         self.assertEqual(deleted["alerts"], 1)
         self.assertEqual(len(db.samples("n")), 1)  # 未来那条还在
 
+    def test_delete_node_cascades_accounts(self):
+        db = _tmp_db("casc.db"); reg = Registry(db)
+        reg.register_accounts({"node": {"id": "n", "base_url": "http://1.2.3.4:8000"},
+                               "accounts": [{"id": "a1", "owner": "X"}, {"id": "a2", "owner": "X"}]})
+        self.assertEqual(len(reg.accounts("n")), 2)
+        reg.delete("n")
+        self.assertEqual(reg.accounts("n"), [])        # 账户随节点删除,不留孤儿
+        self.assertEqual(db.list_accounts(), [])
+
     def test_health(self):
         db = _tmp_db("health.db"); reg = Registry(db)
         reg.register({"id": "n", "base_url": "http://1.2.3.4:8000"})
