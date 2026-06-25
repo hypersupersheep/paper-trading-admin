@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -10,6 +11,38 @@ from .db import Database
 
 _ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _URL_RE = re.compile(r"^https?://[^\s/]+(:\d+)?(/.*)?$")
+_HOSTPORT_RE = re.compile(r"^(https?://)([^/:]+)(:\d+)?(/.*)?$")
+
+
+def _suspect_host(host: str) -> bool:
+    """这个 host 是否"对外大概率不可达"(容器/虚拟/回环/链路本地)。主机名一律放行。"""
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False  # 是域名,不动
+    if ip.is_loopback or ip.is_link_local:
+        return True
+    # Docker 默认网段 172.16.0.0/12(常被 lan_ip 误选)
+    return ip.version == 4 and ip in ipaddress.ip_network("172.16.0.0/12")
+
+
+def _fix_base_url_host(base_url: str, client_ip: str | None) -> str:
+    """节点报上来的 base_url host 若是容器/虚拟地址且与登记请求来源 IP 不符,
+    改用来源 IP(它才是真正能连回节点的地址)。来源是回环(本机联调)时不动。"""
+    if not client_ip:
+        return base_url
+    try:
+        if ipaddress.ip_address(client_ip).is_loopback:
+            return base_url
+    except ValueError:
+        return base_url
+    m = _HOSTPORT_RE.match(base_url)
+    if not m:
+        return base_url
+    scheme, host, port, rest = m.groups()
+    if host != client_ip and _suspect_host(host):
+        return f"{scheme}{client_ip}{port or ''}{rest or ''}"
+    return base_url
 
 
 def _now() -> str:
@@ -26,11 +59,14 @@ class Registry:
     def __init__(self, db: Database) -> None:
         self.db = db
 
-    def register(self, payload: dict[str, Any], *, source: str = "manual") -> dict[str, Any]:
-        """新增/更新一个节点。manual(手填) 与 self(自注册) 共用,幂等。"""
+    def register(self, payload: dict[str, Any], *, source: str = "manual",
+                 client_ip: str | None = None) -> dict[str, Any]:
+        """新增/更新一个节点。manual(手填) 与 self(自注册) 共用,幂等。
+        client_ip = 登记请求来源 IP,用于纠正报错的 base_url host(挑错网卡/容器地址)。"""
         base_url = str(payload.get("base_url") or "").strip()
         if not _URL_RE.match(base_url):
             raise ValueError("base_url 非法,需形如 http://host:port")
+        base_url = _fix_base_url_host(base_url, client_ip)
 
         node_id = str(payload.get("id") or "").strip()
         if not node_id:
@@ -72,7 +108,8 @@ class Registry:
         return True
 
     # ---- 账户级登记 -----------------------------------------------------
-    def register_accounts(self, payload: dict[str, Any], *, source: str = "app") -> dict[str, Any]:
+    def register_accounts(self, payload: dict[str, Any], *, source: str = "app",
+                          client_ip: str | None = None) -> dict[str, Any]:
         """账户登记。报文形如 {"node": {...}, "account": {...}} 或 {"node": {...}, "accounts": [...]}.
 
         node 段先 upsert(复用节点登记,拿到稳定 node_id 作传输层);account 段写账户注册表。
@@ -81,7 +118,7 @@ class Registry:
         node_payload = payload.get("node")
         if not isinstance(node_payload, dict):
             raise ValueError("缺少 node 段")
-        node = self.register(node_payload, source=source)  # upsert 节点(已校验 base_url/id)
+        node = self.register(node_payload, source=source, client_ip=client_ip)  # upsert 节点(已校验 base_url/id)
         node_id = node["id"]
 
         rows = payload.get("accounts")

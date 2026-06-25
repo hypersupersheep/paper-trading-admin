@@ -20,7 +20,8 @@ from admin.events import EventBus
 from admin.node_sse import NodeSSEManager
 from admin.poller import Poller
 from admin.registry import Registry
-from admin.server import build_overview
+from admin.registry import _fix_base_url_host
+from admin.server import _health, _public_node, build_overview
 from tests import mock_node
 
 
@@ -280,6 +281,68 @@ class TestNodeTokenAuth(unittest.TestCase):
             self.assertEqual(db.get_state("n")["status"], "offline")
         finally:
             httpd.shutdown()
+
+
+class TestHardening(unittest.TestCase):
+    """P0/P1 加固:token 脱敏、base_url 兜底、数据源退回、保留清理、health。"""
+
+    def test_token_redaction(self):
+        pub = _public_node({"id": "n", "base_url": "x", "token": "secret-xyz"})
+        self.assertNotIn("token", pub)
+        self.assertTrue(pub["has_token"])
+        self.assertFalse(_public_node({"id": "n", "token": None})["has_token"])
+
+    def test_base_url_host_fix(self):
+        # 容器段 172.19.x 且与来源 IP 不符 → 改用来源 IP(保留端口)
+        self.assertEqual(_fix_base_url_host("http://172.19.0.1:8000", "192.168.0.186"),
+                         "http://192.168.0.186:8000")
+        # 正常 LAN 地址 → 不动
+        self.assertEqual(_fix_base_url_host("http://192.168.0.50:8000", "192.168.0.186"),
+                         "http://192.168.0.50:8000")
+        # 来源是回环(本机联调)→ 不动
+        self.assertEqual(_fix_base_url_host("http://172.19.0.1:8000", "127.0.0.1"),
+                         "http://172.19.0.1:8000")
+        # 域名 → 不动
+        self.assertEqual(_fix_base_url_host("http://node.lan:8000", "192.168.0.186"),
+                         "http://node.lan:8000")
+
+    def test_prune_removes_old_rows(self):
+        db = _tmp_db("prune.db")
+        db.add_sample({"node_id": "n", "ts": "2020-01-01T00:00:00+00:00", "equity": 1,
+                       "pnl": 0, "pnl_pct": 0, "day_pnl": 0, "exposure": 0, "position_count": 0})
+        db.add_sample({"node_id": "n", "ts": "2999-01-01T00:00:00+00:00", "equity": 2,
+                       "pnl": 0, "pnl_pct": 0, "day_pnl": 0, "exposure": 0, "position_count": 0})
+        db.add_alert({"node_id": "n", "ts": "2020-01-01T00:00:00+00:00", "severity": "info", "rule": "x", "message": "old"})
+        deleted = db.prune("2025-01-01T00:00:00+00:00", "2025-01-01T00:00:00+00:00")
+        self.assertEqual(deleted["equity_samples"], 1)
+        self.assertEqual(deleted["alerts"], 1)
+        self.assertEqual(len(db.samples("n")), 1)  # 未来那条还在
+
+    def test_health(self):
+        db = _tmp_db("health.db"); reg = Registry(db)
+        reg.register({"id": "n", "base_url": "http://1.2.3.4:8000"})
+        h = _health(db, reg)
+        self.assertEqual(h["status"], "ok")
+        self.assertEqual(h["nodes"], 1)
+        self.assertIn("version", h)
+        self.assertIn("uptime_seconds", h)
+
+    def test_data_source_fallback_keeps_node_online(self):
+        mock_node.FAIL_DATA_SOURCE = True
+        httpd = mock_node.serve(8738)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            db = _tmp_db("ds.db"); cfg = Config()
+            reg = Registry(db)
+            reg.register({"id": "m", "base_url": "http://127.0.0.1:8738", "data_source": "tongdaxin"})
+            poller = Poller(cfg, db, reg, AlertEngine(cfg))
+            poller.poll_once()
+            # 带 data_source 失败 → 退回不带 → 仍在线(保住可见性)
+            self.assertEqual(db.get_state("m")["status"], "online")
+            self.assertIsNotNone(db.get_state("m")["equity"])
+        finally:
+            httpd.shutdown()
+            mock_node.FAIL_DATA_SOURCE = False
 
 
 if __name__ == "__main__":

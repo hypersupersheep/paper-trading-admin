@@ -306,3 +306,20 @@ class Database:
     def ack_alert(self, alert_id: int) -> None:
         with self.write() as conn:
             conn.execute("UPDATE alerts SET acknowledged = 1 WHERE id = ?", (alert_id,))
+
+    # ---- 保留/清理(防时序表无限增长)----------------------------------
+    def prune(self, sample_cutoff: str, alert_cutoff: str) -> dict[str, int]:
+        """删除早于 cutoff(ISO8601 UTC 字符串)的样本与告警。返回各表删除行数。"""
+        with self.write() as conn:
+            n_eq = conn.execute("DELETE FROM equity_samples WHERE ts < ?", (sample_cutoff,)).rowcount
+            n_ac = conn.execute("DELETE FROM account_samples WHERE ts < ?", (sample_cutoff,)).rowcount
+            n_al = conn.execute("DELETE FROM alerts WHERE ts < ?", (alert_cutoff,)).rowcount
+        return {"equity_samples": n_eq, "account_samples": n_ac, "alerts": n_al}
+
+    def vacuum(self) -> None:
+        conn = self._connect()
+        try:
+            conn.isolation_level = None  # VACUUM 不能在事务里跑
+            conn.execute("VACUUM")
+        finally:
+            conn.close()

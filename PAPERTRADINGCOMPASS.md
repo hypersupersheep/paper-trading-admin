@@ -60,6 +60,11 @@ ADMIN_TOKEN=改成你的口令 python3 -m admin
 | `ADMIN_TOKEN` | 空 | **共享口令**:设了之后,登记 / 开户 / 注销等写操作要带它。生产建议设。 |
 | `POLL_INTERVAL` | `15.0` | 轮询兜底周期(秒);实时走 SSE,轮询只补漏。无 SSE 的节点可调小 |
 | `ADMIN_DB` | `data/admin.db` | Admin 自己的库 |
+| `SAMPLE_RETENTION_DAYS` | `14` | 净值时序保留天数(自动清理,防 DB 膨胀) |
+| `ALERT_RETENTION_DAYS` | `30` | 告警保留天数 |
+
+> 健康自检:`GET http://<Admin>:8800/api/admin/health` 看版本/节点数/在线/运行时长(排查"版本滞后")。
+> 韧性:数据源抖动不再让节点离线(自动退回持仓最后价);Docker/VPN 机器报错网卡地址(172.x)Admin 用登记来源 IP 自动纠正,不必手填「本机地址」。
 
 ---
 

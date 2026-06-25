@@ -158,11 +158,12 @@ account 实时指标不存这里 —— 轮询时从所属节点 `node_state.sum
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
+| GET | `/api/admin/health` | Admin 自身健康:`{status, version, api_version, nodes, nodes_online, accounts, uptime_seconds}` |
 | GET | `/api/admin/overview` | 监控墙首屏:`{accounts:[账户卡], nodes:[节点连通性], totals, leaderboard(按账户), alerts(未确认)}` |
 | POST | `/api/admin/accounts/register` | 账户登记(单条 `{node, account}` 或批量 `{node, accounts:[]}`);幂等于 `(node.id, account.id)`;返回 `201 {node_id, accounts:[...]}` |
 | POST | `/api/admin/accounts/{node_id}/{account_id}/delete` | 账户注销;无需 body;返回 `{deregistered: bool}` |
 | GET | `/api/admin/accounts` | 已登记账户列表(可带 `?node_id=`) |
-| GET | `/api/admin/nodes` | 注册表 |
+| GET | `/api/admin/nodes` | 注册表(**node.token 已脱敏**,只回 `has_token`)。登记时若 `base_url` host 是容器/虚拟地址,Admin 用请求来源 IP 自动纠正。 |
 | POST | `/api/admin/nodes` | 手动加节点(body 见 §2 nodes) |
 | POST | `/api/admin/nodes/{id}/delete` | 删节点(连带 state/samples 不删历史 alerts) |
 | GET | `/api/admin/nodes/{id}` | 下钻:state + 最近 summary(账户/持仓)+ meta |

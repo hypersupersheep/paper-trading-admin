@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import queue
+import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -20,6 +21,20 @@ from .db import Database
 from .events import EventBus
 from .node_client import NodeClient, NodeError
 from .registry import Registry
+
+_START = time.monotonic()
+
+
+def _health(db: Database, registry: Registry) -> dict[str, Any]:
+    from . import ADMIN_API_VERSION, __version__
+    states = db.all_states()
+    online = sum(1 for s in states.values() if s.get("status") == "online")
+    return {
+        "status": "ok", "version": __version__, "api_version": ADMIN_API_VERSION,
+        "nodes": len(registry.list()), "nodes_online": online,
+        "accounts": len(registry.accounts()),
+        "uptime_seconds": round(time.monotonic() - _START, 1),
+    }
 
 
 class Services:
@@ -40,6 +55,18 @@ class Services:
 _STATE_FIELDS = ("status", "last_ok_at", "last_error", "latency_ms", "consecutive_fail",
                  "equity", "pnl", "pnl_pct", "day_pnl", "exposure",
                  "position_count", "account_count", "updated_at")
+
+# 解析过的 summary_json 缓存:{node_id: (updated_at, parsed)},避免每次 overview/每个 SSE tick 重复解析
+_summary_cache: dict[str, tuple[Any, dict]] = {}
+
+
+def _public_node(node: dict[str, Any] | None) -> dict[str, Any] | None:
+    """对外响应里抹掉 node.token 明文(安全):只回 has_token 标志。"""
+    if not node:
+        return node
+    out = {k: v for k, v in node.items() if k != "token"}
+    out["has_token"] = bool(node.get("token"))
+    return out
 
 
 def _node_card(node: dict[str, Any], state: dict[str, Any] | None, spark: list[float]) -> dict[str, Any]:
@@ -102,11 +129,20 @@ def build_overview(db: Database, registry: Registry) -> dict[str, Any]:
     # 账户卡(监控单元):按已登记账户,从其节点最近 summary 里取该账户实时指标
     summaries: dict[str, dict] = {}
     for nid, st in states.items():
-        if st.get("summary_json"):
-            try:
-                summaries[nid] = json.loads(st["summary_json"])
-            except (ValueError, TypeError):
-                pass
+        sj = st.get("summary_json")
+        if not sj:
+            continue
+        key = st.get("updated_at")
+        cached = _summary_cache.get(nid)
+        if cached and cached[0] == key:        # summary 未变,复用上次解析
+            summaries[nid] = cached[1]
+            continue
+        try:
+            parsed = json.loads(sj)
+            _summary_cache[nid] = (key, parsed)
+            summaries[nid] = parsed
+        except (ValueError, TypeError):
+            pass
 
     account_cards: list[dict[str, Any]] = []
     for reg in registry.accounts():
@@ -191,6 +227,9 @@ def build_handler(services: Services) -> type[BaseHTTPRequestHandler]:
             q = urlparse(self.path).query
             return {k: v[-1] for k, v in parse_qs(q).items()}
 
+        def _client_ip(self) -> str | None:
+            return self.client_address[0] if self.client_address else None
+
         # ---- 路由 ----
         def do_GET(self) -> None:
             path = urlparse(self.path).path
@@ -198,8 +237,11 @@ def build_handler(services: Services) -> type[BaseHTTPRequestHandler]:
                 if path == "/api/admin/overview":
                     self._json(build_overview(db, registry))
                     return
+                if path == "/api/admin/health":
+                    self._json(_health(db, registry))
+                    return
                 if path == "/api/admin/nodes":
-                    self._json({"nodes": registry.list()})
+                    self._json({"nodes": [_public_node(n) for n in registry.list()]})
                     return
                 if path == "/api/admin/alerts":
                     q = self._query()
@@ -242,15 +284,15 @@ def build_handler(services: Services) -> type[BaseHTTPRequestHandler]:
                         self._json({"error": "需要有效的 X-Admin-Token"}, HTTPStatus.UNAUTHORIZED)
                         return
                     source = "self" if path.endswith("register") else "manual"
-                    node = registry.register(payload, source=source)
-                    self._json({"node": node}, HTTPStatus.CREATED)
+                    node = registry.register(payload, source=source, client_ip=self._client_ip())
+                    self._json({"node": _public_node(node)}, HTTPStatus.CREATED)
                     return
                 # 账户级登记(app 开户/登记后调用;支持单条 account 或批量 accounts[])
                 if path == "/api/admin/accounts/register":
                     if not self._auth_ok():
                         self._json({"error": "需要有效的 X-Admin-Token"}, HTTPStatus.UNAUTHORIZED)
                         return
-                    self._json(registry.register_accounts(payload), HTTPStatus.CREATED)
+                    self._json(registry.register_accounts(payload, client_ip=self._client_ip()), HTTPStatus.CREATED)
                     return
                 # 账户注销:/api/admin/accounts/{node_id}/{account_id}/delete
                 if path.startswith("/api/admin/accounts/") and path.endswith("/delete"):
@@ -299,7 +341,7 @@ def build_handler(services: Services) -> type[BaseHTTPRequestHandler]:
             summary = json.loads(state["summary_json"]) if state.get("summary_json") else None
             meta = json.loads(state["meta_json"]) if state.get("meta_json") else None
             flat = {k: state.get(k) for k in _STATE_FIELDS}
-            self._json({"node": node, "state": flat, "summary": summary, "meta": meta})
+            self._json({"node": _public_node(node), "state": flat, "summary": summary, "meta": meta})
 
         def _node_trades(self, node_id: str) -> None:
             state = db.get_state(node_id)

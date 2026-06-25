@@ -50,6 +50,17 @@ class Poller:
         self._thread: threading.Thread | None = None
         self._round = 0
         self._last_sample_at: dict[str, float] = {}
+        self._last_prune = 0.0
+        self._node_locks: dict[str, threading.Lock] = {}
+        self._locks_guard = threading.Lock()
+
+    def _lock_for(self, node_id: str) -> threading.Lock:
+        """每节点一把锁:周期轮询与事件触发 repoll 串行处理同一节点,避免竞态。"""
+        with self._locks_guard:
+            lock = self._node_locks.get(node_id)
+            if lock is None:
+                lock = self._node_locks[node_id] = threading.Lock()
+            return lock
 
     # ---- 生命周期 -------------------------------------------------------
     def start(self) -> None:
@@ -69,10 +80,24 @@ class Poller:
             t0 = time.monotonic()
             try:
                 self.poll_once()
+                self._maybe_prune()
             except Exception as exc:  # noqa: BLE001 轮询器绝不能因单轮异常死掉
                 print(f"[poller] 本轮异常(已忽略): {exc}")
             elapsed = time.monotonic() - t0
             self._stop.wait(max(0.1, self.cfg.poll_interval - elapsed))
+
+    def _maybe_prune(self) -> None:
+        """按 prune_every 节流清理过期样本/告警,防 DB 无限增长。"""
+        now = time.monotonic()
+        if now - self._last_prune < self.cfg.prune_every:
+            return
+        self._last_prune = now
+        from datetime import timedelta
+        sample_cut = (datetime.now(timezone.utc) - timedelta(days=self.cfg.sample_retention_days)).isoformat()
+        alert_cut = (datetime.now(timezone.utc) - timedelta(days=self.cfg.alert_retention_days)).isoformat()
+        deleted = self.db.prune(sample_cut, alert_cut)
+        if any(deleted.values()):
+            print(f"[poller] 清理过期数据: {deleted}")
 
     # ---- 一轮 -----------------------------------------------------------
     def poll_once(self) -> None:
@@ -120,10 +145,18 @@ class Poller:
                     pass  # meta 拿不到不致命,继续试 summary
 
             # 带 data_source 才会触发节点实时盯市并返回 day_pnl;盯市可能略慢,给更宽超时。
-            path = "/api/portfolio/summary"
+            timeout = max(self.cfg.poll_timeout * 2, 4.0)
+            base = "/api/portfolio/summary"
             if ds:
-                path += f"?data_source={quote(str(ds))}&frequency=5m"
-            summary, lat = client.get(path, timeout=max(self.cfg.poll_timeout * 2, 4.0))
+                try:
+                    summary, lat = client.get(f"{base}?data_source={quote(str(ds))}&frequency=5m", timeout=timeout)
+                except NodeError:
+                    # 数据源抖动(行情网络抽风)→ 退回不带 data_source(用持仓最后价)。
+                    # 至少保住"在线 + 净值 + 持仓",只是少了当日盯市,不让整节点离线。
+                    summary, lat = client.get(base, timeout=timeout)
+                    res["mark_degraded"] = True
+            else:
+                summary, lat = client.get(base, timeout=timeout)
             res["summary"], res["latency"], res["ok"] = summary, lat, True
 
             try:
@@ -136,6 +169,10 @@ class Poller:
         return res
 
     def _process(self, node: dict[str, Any], res: dict[str, Any]) -> None:
+        with self._lock_for(node["id"]):  # 同节点串行,杜绝 cycle 与 repoll 竞态
+            self._do_process(node, res)
+
+    def _do_process(self, node: dict[str, Any], res: dict[str, Any]) -> None:
         node_id, name = node["id"], node.get("name") or node["id"]
         prev = self.db.get_state(node_id) or {}
         now = _now()

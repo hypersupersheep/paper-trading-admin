@@ -43,6 +43,11 @@ class Config:
     sample_every: float = 30.0     # 每隔多少秒落一个净值时序采样点
     offline_after_fails: int = 2   # 连续失败几次判离线
 
+    # 保留/清理:防时序表无限增长
+    sample_retention_days: float = 14.0
+    alert_retention_days: float = 30.0
+    prune_every: float = 3600.0    # 每隔多少秒清理一次过期数据
+
     # 模拟盘:不设交易阈值告警。仅保留连通性告警(离线/恢复)。
 
     @classmethod
@@ -74,4 +79,6 @@ class Config:
             poll_workers=_i("POLL_WORKERS", 16),
             sample_every=_f("SAMPLE_EVERY", 30.0),
             offline_after_fails=_i("OFFLINE_AFTER_FAILS", 2),
+            sample_retention_days=_f("SAMPLE_RETENTION_DAYS", 14.0),
+            alert_retention_days=_f("ALERT_RETENTION_DAYS", 30.0),
         )

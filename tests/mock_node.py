@@ -31,6 +31,8 @@ _lock = threading.Lock()
 
 # 模拟节点 v1.11.0 鉴权:设了则所有请求需 X-Admin-Token == REQUIRE_TOKEN,否则 401。
 REQUIRE_TOKEN: str | None = None
+# 设了则带 data_source 的 summary 请求返回 500(模拟行情数据源抖动),不带则正常。
+FAIL_DATA_SOURCE: bool = False
 
 # 极简 SSE 总线,用于测试节点 -> Admin 的事件触发重拉
 _SUBS: set = set()
@@ -120,6 +122,8 @@ class Handler(BaseHTTPRequestHandler):
                                "data_sources": ["mock"], "default_data_source": "mock",
                                "capabilities": {"accounts": True, "event_stream": True}})
         if p == "/api/portfolio/summary":
+            if FAIL_DATA_SOURCE and "data_source=" in self.path:
+                return self._json({"error": "数据源抖动"}, 500)  # 仅带 data_source 时失败
             with _lock:
                 return self._json(_summary())
         if p == "/api/audit/trades":
