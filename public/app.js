@@ -55,6 +55,71 @@ function sparkline(values) {
 // ---- 渲染:监控墙 -------------------------------------------------------
 const STATUS_LABEL = { online: "", offline: "离线", degraded: "连接异常", missing: "节点上已删", unknown: "未知" };
 
+// 带正负号的格式化(ticker 用,正数加 +)
+function fmtSigned(v, kind) {
+  if (v == null) return "—";
+  const body = kind === "pct" ? fmtPct(v) : fmtMoney(v);
+  return (Number(v) > 0 ? "+" : "") + body;
+}
+
+// ---- 顶部滚动横条 -------------------------------------------------------
+function tickerItem(label, value, cls) {
+  return `<span class="tk"><b>${label}</b><span class="${cls || ""}">${value}</span></span>`;
+}
+
+function buildTickerItems(d) {
+  const t = d.totals || {};
+  const online = (d.accounts || []).filter((a) => a.status === "online");
+  const out = [];
+  out.push(tickerItem("节点", `${t.node_online}/${t.node_count} 在线`));
+  const owners = new Set(online.map((a) => a.owner).filter(Boolean));
+  out.push(tickerItem("在线交易员", `${owners.size} 人`));
+  out.push(tickerItem("在线账户", `${t.online}/${t.account_count}`));
+  out.push(tickerItem("总净值", fmtMoney(t.equity)));
+  out.push(tickerItem("总盈亏", fmtSigned(t.pnl), signClass(t.pnl)));
+
+  if (online.length) {
+    // 最佳交易员:按 owner 聚合收益率 = Σpnl / Σ(本金),本金 = 净值 - 盈亏
+    const agg = {};
+    for (const a of online) {
+      const o = a.owner || a.name;
+      const e = (agg[o] ||= { pnl: 0, base: 0 });
+      e.pnl += a.pnl || 0;
+      e.base += (a.equity || 0) - (a.pnl || 0);
+    }
+    let bo = null, br = -Infinity;
+    for (const [o, e] of Object.entries(agg)) {
+      const r = e.base > 0 ? e.pnl / e.base : 0;
+      if (r > br) { br = r; bo = o; }
+    }
+    if (bo !== null) out.push(tickerItem("最佳交易员", `${bo} ${fmtSigned(br, "pct")}`, signClass(br)));
+
+    // 最佳策略:单账户最高累计收益率
+    const byPct = online.filter((a) => a.pnl_pct != null).sort((x, y) => y.pnl_pct - x.pnl_pct);
+    if (byPct.length) {
+      const a = byPct[0];
+      out.push(tickerItem("最佳策略", `${a.name} ${fmtSigned(a.pnl_pct, "pct")}`, signClass(a.pnl_pct)));
+    }
+    // 本日最佳 / 本日最差:按当日盈亏
+    const byDay = online.filter((a) => a.day_pnl != null).sort((x, y) => y.day_pnl - x.day_pnl);
+    if (byDay.length) {
+      const top = byDay[0];
+      out.push(tickerItem("本日最佳", `${top.name} ${fmtSigned(top.day_pnl)}`, signClass(top.day_pnl)));
+      const bot = byDay[byDay.length - 1];
+      if (bot && bot !== top) out.push(tickerItem("本日最差", `${bot.name} ${fmtSigned(bot.day_pnl)}`, signClass(bot.day_pnl)));
+    }
+  }
+  return out;
+}
+
+let _lastTicker = "";
+function renderTicker(d) {
+  const items = buildTickerItems(d).join("");
+  if (items === _lastTicker) return;       // 内容没变就不重建,避免滚动动画被打断
+  _lastTicker = items;
+  $("#ticker-track").innerHTML = items + items;  // 两份拼接 → translateX(-50%) 无缝循环
+}
+
 function renderTotals(t) {
   $("#totals").innerHTML = `
     <div class="kv"><b class="${signClass(t.pnl)}">${fmtMoney(t.pnl)}</b><span>在线账户盈亏</span></div>
@@ -264,6 +329,7 @@ function openAccountForm(nodeId, name) {
 
 // ---- 主循环:优先 SSE 推送,断连时退回轮询 -------------------------------
 function renderAll(d) {
+  renderTicker(d);
   renderTotals(d.totals);
   renderWall(d.accounts || [], d.nodes || []);
   renderLeaderboard(d.leaderboard);
