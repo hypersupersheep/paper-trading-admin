@@ -13,7 +13,7 @@ import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from .alerts import AlertEngine
 from .config import Config
@@ -104,6 +104,7 @@ def _account_card(reg: dict[str, Any], node: dict[str, Any] | None,
         "pnl_pct": _to_num(m.get("pnl_pct")), "exposure": _to_num(m.get("exposure")),
         "day_pnl": _to_num(m.get("day_pnl")),
         "position_count": len(m.get("positions") or []),
+        "description": m.get("description") or None,   # 策略描述(节点 summary 已带)
         "spark": spark,
     }
 
@@ -257,7 +258,17 @@ def build_handler(services: Services) -> type[BaseHTTPRequestHandler]:
                     return
                 if path.startswith("/api/admin/nodes/"):
                     rest = path.removeprefix("/api/admin/nodes/")
-                    node_id = unquote(rest.split("/")[0])
+                    parts = [unquote(p) for p in rest.split("/")]
+                    node_id = parts[0]
+                    # 策略描述/文件:代理到节点(带 node.token)
+                    if len(parts) >= 4 and parts[1] == "accounts":
+                        account_id = parts[2]
+                        if parts[3] == "description" and len(parts) == 4:
+                            self._proxy_description(node_id, account_id)
+                            return
+                        if parts[3] == "files" and len(parts) >= 5:
+                            self._proxy_file(node_id, account_id, "/".join(parts[4:]))
+                            return
                     if rest.endswith("/trades"):
                         self._node_trades(node_id)
                         return
@@ -349,6 +360,46 @@ def build_handler(services: Services) -> type[BaseHTTPRequestHandler]:
                 self._json({"trades": []})
                 return
             self._json(json.loads(state["trades_json"]))
+
+        def _proxy_description(self, node_id: str, account_id: str) -> None:
+            """取某账户最新策略描述 + 文件清单(代理节点 GET .../description,带 node.token)。"""
+            node = registry.get(node_id)
+            if not node:
+                self._json({"error": f"未知节点: {node_id}"}, HTTPStatus.NOT_FOUND)
+                return
+            client = NodeClient(node["base_url"], node.get("token"), timeout=max(cfg.poll_timeout * 2, 5.0))
+            try:
+                payload, _ = client.get(f"/api/accounts/{quote(account_id)}/description")
+            except NodeError as exc:
+                self._json({"error": f"取策略描述失败: {exc}"}, HTTPStatus.BAD_GATEWAY)
+                return
+            self._json(payload)
+
+        def _proxy_file(self, node_id: str, account_id: str, file_id: str) -> None:
+            """把节点上的说明文件原始字节透传给浏览器(带 node.token;保留 Content-Type/Disposition)。"""
+            node = registry.get(node_id)
+            if not node:
+                self._json({"error": f"未知节点: {node_id}"}, HTTPStatus.NOT_FOUND)
+                return
+            client = NodeClient(node["base_url"], node.get("token"), timeout=30.0)
+            try:
+                status, body, headers = client.get_raw(
+                    f"/api/accounts/{quote(account_id)}/files/{quote(file_id)}")
+            except NodeError as exc:
+                self._json({"error": f"取文件失败: {exc}"}, HTTPStatus.BAD_GATEWAY)
+                return
+            self.send_response(status)
+            self.send_header("Content-Type", headers.get("Content-Type") or "application/octet-stream")
+            self.send_header("Content-Length", str(len(body)))
+            cd = headers.get("Content-Disposition")
+            if cd:
+                self.send_header("Content-Disposition", cd)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionError):
+                self.close_connection = True
 
         def _control(self, node_id: str, payload: dict[str, Any]) -> None:
             """反向控制:把请求代理到节点(带节点 token)。唯一对节点的写通道。"""

@@ -283,6 +283,33 @@ class TestNodeTokenAuth(unittest.TestCase):
             httpd.shutdown()
 
 
+class TestStrategyDocs(unittest.TestCase):
+    """策略描述上墙 + 文件代理透传(契约 v8)。"""
+
+    def test_description_in_overview_and_raw_file(self):
+        from admin.node_client import NodeClient
+        httpd = mock_node.serve(8739)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            db = _tmp_db("docs.db"); cfg = Config()
+            reg = Registry(db)
+            reg.register({"id": "m", "base_url": "http://127.0.0.1:8739", "data_source": "mock"})
+            reg.register_accounts({"node": {"id": "m", "base_url": "http://127.0.0.1:8739"},
+                                   "account": {"id": "acct_mock", "owner": "M"}})
+            Poller(cfg, db, reg, AlertEngine(cfg)).poll_once()
+            # ① 描述随 summary 上墙
+            acct = build_overview(db, reg)["accounts"][0]
+            self.assertEqual(acct["description"], "动量 + 均值回归,日频调仓")
+            # ② 文件原始字节 + Content-Type 透传(node_client.get_raw)
+            status, body, headers = NodeClient("http://127.0.0.1:8739", None).get_raw(
+                "/api/accounts/acct_mock/files/f1")
+            self.assertEqual(status, 200)
+            self.assertIn(b"strategy doc", body)
+            self.assertIn("text/markdown", headers.get("Content-Type", ""))
+        finally:
+            httpd.shutdown()
+
+
 class TestHardening(unittest.TestCase):
     """P0/P1 加固:token 脱敏、base_url 兜底、数据源退回、保留清理、health。"""
 

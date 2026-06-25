@@ -58,6 +58,7 @@ def _summary() -> dict:
         "day_pnl": s["day_pnl"], "day_realized_pnl": 0.0,
         "market_value": round(s["equity"] * s["exposure"], 2),
         "unrealized_pnl": s["pnl"],
+        "description": "动量 + 均值回归,日频调仓",
         "positions": [
             {"symbol": "600519.SH", "name": "贵州茅台", "quantity": 100, "avg_cost": 1600.0,
              "last_price": 1700.0, "market_value": 170000.0, "cost_basis": 160000.0,
@@ -130,6 +131,20 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(_trades())
         if p == "/api/stream":
             return self._sse()
+        if p.startswith("/api/accounts/") and p.endswith("/description"):
+            return self._json({"description": "动量 + 均值回归,日频调仓",
+                               "files": [{"id": "f1", "filename": "策略说明.md",
+                                          "content_type": "text/markdown", "size": 1234,
+                                          "uploaded_at": "2026-06-25T10:00:00+08:00"}]})
+        if p.startswith("/api/accounts/") and "/files/" in p:
+            body = b"# strategy doc\nhello world"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/markdown; charset=utf-8")
+            self.send_header("Content-Disposition", "inline; filename*=UTF-8''doc.md")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         return self._json({"error": "not found"}, 404)
 
     def _sse(self):

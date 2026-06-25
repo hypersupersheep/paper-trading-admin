@@ -169,6 +169,8 @@ account 实时指标不存这里 —— 轮询时从所属节点 `node_state.sum
 | GET | `/api/admin/nodes/{id}` | 下钻:state + 最近 summary(账户/持仓)+ meta |
 | GET | `/api/admin/nodes/{id}/trades` | 最近成交(取缓存 trades_json) |
 | GET | `/api/admin/nodes/{id}/history?limit=` | equity_samples 序列 |
+| GET | `/api/admin/nodes/{nid}/accounts/{aid}/description` | 代理节点取该账户策略描述 + 文件清单(带 node.token) |
+| GET | `/api/admin/nodes/{nid}/accounts/{aid}/files/{fid}` | 代理透传说明文件原始字节(保留 Content-Type/Content-Disposition;浏览器可直接打开/预览) |
 | POST | `/api/admin/nodes/{id}/control` | **反向控制代理**:`{method,path,body}` → 转发到节点(带其 token) |
 | POST | `/api/admin/register` | 节点自注册(见 §4) |
 | GET | `/api/admin/alerts?limit=&unack=1` | 告警列表 |

@@ -56,6 +56,17 @@ function sparkline(values) {
 // ---- 渲染:监控墙 -------------------------------------------------------
 const STATUS_LABEL = { online: "", offline: "离线", degraded: "连接异常", missing: "节点上已删", unknown: "未知" };
 
+// HTML 转义(描述是自由文本/AI 生成,防注入)
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function truncate(s, n) { s = String(s || ""); return s.length > n ? s.slice(0, n) + "…" : s; }
+function fmtSize(b) {
+  if (b == null) return "";
+  return b >= 1048576 ? (b / 1048576).toFixed(1) + "MB" : Math.max(1, Math.round(b / 1024)) + "KB";
+}
+
 // 带正负号的格式化(ticker 用,正数加 +)
 function fmtSigned(v, kind) {
   if (v == null) return "—";
@@ -192,6 +203,7 @@ function accountCard(a) {
       ${note}
     </div>
     ${a.owner && a.owner !== a.name ? `<div class="acct-sub">${a.owner}</div>` : ""}
+    ${a.description ? `<div class="desc" title="${esc(a.description)}">${esc(truncate(a.description, 76))}</div>` : ""}
     <div class="metrics">
       <div class="metric lead"><span>总收益率</span><b class="${signClass(a.pnl_pct)}">${fmtSigned(a.pnl_pct, "pct")}</b></div>
       <div class="metric"><span>当日盈亏</span><b class="${signClass(a.day_pnl)}">${fmtSigned(a.day_pnl)}</b></div>
@@ -200,7 +212,7 @@ function accountCard(a) {
     </div>
     ${sparkline(a.spark)}
     <div class="foot"><span>${a.owner || ""}</span><span>${a.position_count ?? "—"} 持仓</span></div>`;
-  const open = () => openAccount(a.node_id, a.account_id, a.owner, a.name);
+  const open = () => openAccount(a.node_id, a.account_id, a.owner, a.name, a.description);
   card.setAttribute("role", "button");
   card.setAttribute("tabindex", "0");
   card.setAttribute("aria-label",
@@ -241,16 +253,20 @@ function renderAlerts(rows) {
 }
 
 // ---- 下钻弹窗 -----------------------------------------------------------
-async function openAccount(nodeId, accountId, owner, name) {
+async function openAccount(nodeId, accountId, owner, name, description) {
   $("#modal-title").textContent = `${owner} · ${name}`;
   $("#modal-body").innerHTML = "加载中…";
   $("#modal").hidden = false;
+  const aid = encodeURIComponent(accountId), nid = encodeURIComponent(nodeId);
   try {
-    const [detail, trades] = await Promise.all([
-      api("GET", `/api/admin/nodes/${nodeId}`),
-      api("GET", `/api/admin/nodes/${nodeId}/trades`),
+    const [detail, trades, desc] = await Promise.all([
+      api("GET", `/api/admin/nodes/${nid}`),
+      api("GET", `/api/admin/nodes/${nid}/trades`),
+      // 策略描述 + 文件清单(节点离线/旧版会失败,降级用卡片缓存的描述)
+      api("GET", `/api/admin/nodes/${nid}/accounts/${aid}/description`).catch(() => null),
     ]);
-    $("#modal-body").innerHTML = renderAccountDetail(accountId, detail, trades.trades || []);
+    const descData = desc || (description ? { description, files: [] } : null);
+    $("#modal-body").innerHTML = renderAccountDetail(accountId, nodeId, detail, trades.trades || [], descData);
     const nodeName = (detail.node && detail.node.name) || nodeId;
     $("#act-open-account").onclick = () => openAccountForm(nodeId, nodeName);
   } catch (e) {
@@ -258,12 +274,25 @@ async function openAccount(nodeId, accountId, owner, name) {
   }
 }
 
-function renderAccountDetail(accountId, detail, allTrades) {
+function renderAccountDetail(accountId, nodeId, detail, allTrades, desc) {
   const accounts = (detail.summary && detail.summary.accounts) || [];
   const a = accounts.find((x) => x.id === accountId);
   let html = `<div class="form-actions" style="justify-content:flex-start">
       <button class="btn-primary" id="act-open-account">在该节点远程开户</button>
     </div>`;
+
+  // 策略描述(文字 + 说明文件链接,文件经 Admin 代理透传)
+  const files = (desc && desc.files) || [];
+  if (desc && (desc.description || files.length)) {
+    html += `<div class="section-title">策略描述</div>`;
+    if (desc.description) html += `<div class="desc-full">${esc(desc.description)}</div>`;
+    if (files.length) {
+      const nid = encodeURIComponent(nodeId), aid = encodeURIComponent(accountId);
+      html += `<div class="files">` + files.map((f) =>
+        `<a class="file" href="/api/admin/nodes/${nid}/accounts/${aid}/files/${encodeURIComponent(f.id)}" target="_blank" rel="noopener">📄 ${esc(f.filename)}<small>${fmtSize(f.size)}</small></a>`
+      ).join("") + `</div>`;
+    }
+  }
 
   if (a) {
     html += `<div class="section-title">净值 ${fmtMoney(a.equity)} · 收益 <span class="${signClass(a.pnl_pct)}">${fmtPct(a.pnl_pct)}</span> · 当日 <span class="${signClass(a.day_pnl)}">${fmtMoney(a.day_pnl)}</span> · 仓位 ${fmtPct(a.exposure)}</div>`;

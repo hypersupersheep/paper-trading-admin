@@ -73,6 +73,21 @@ class NodeClient:
         payload, _status, latency = self.request("GET", path, timeout=timeout)
         return payload, latency
 
+    def get_raw(self, path: str, timeout: float | None = None) -> tuple[int, bytes, dict[str, str]]:
+        """原始字节 GET(文件透传用):返回 (status, body_bytes, headers)。带 token。"""
+        url = self.base_url + (path if path.startswith("/") else "/" + path)
+        headers = {}
+        if self.token:
+            headers["X-Admin-Token"] = self.token
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
+                return resp.status, resp.read(), {k: v for k, v in resp.headers.items()}
+        except urllib.error.HTTPError as exc:  # 节点回了非 2xx,把状态/体如实透传
+            return exc.code, exc.read(), {k: v for k, v in exc.headers.items()}
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise NodeError(f"GET {path} 连接失败: {getattr(exc, 'reason', exc)}")
+
 
 def _safe_json(raw: bytes) -> Any | None:
     if not raw:
