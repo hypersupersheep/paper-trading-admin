@@ -21,7 +21,7 @@ from admin.node_sse import NodeSSEManager
 from admin.poller import Poller
 from admin.registry import Registry
 from admin.registry import _fix_base_url_host
-from admin.server import _health, _public_node, build_overview
+from admin.server import _health, _norm_path, _public_node, build_overview
 from tests import mock_node
 
 
@@ -312,6 +312,14 @@ class TestStrategyDocs(unittest.TestCase):
 
 class TestHardening(unittest.TestCase):
     """P0/P1 加固:token 脱敏、base_url 兜底、数据源退回、保留清理、health。"""
+
+    def test_path_normalization(self):
+        # 尾斜杠 / 双斜杠都规整,避免节点拼错路径导致 404
+        self.assertEqual(_norm_path("/api/admin/accounts/register/"), "/api/admin/accounts/register")
+        self.assertEqual(_norm_path("//api/admin/accounts/register"), "/api/admin/accounts/register")
+        self.assertEqual(_norm_path("/api/admin/accounts/register///"), "/api/admin/accounts/register")
+        self.assertEqual(_norm_path("/"), "/")
+        self.assertEqual(_norm_path("/styles.css"), "/styles.css")
 
     def test_token_redaction(self):
         pub = _public_node({"id": "n", "base_url": "x", "token": "secret-xyz"})

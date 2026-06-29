@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import queue
+import re
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,6 +24,13 @@ from .node_client import NodeClient, NodeError
 from .registry import Registry
 
 _START = time.monotonic()
+
+
+def _norm_path(path: str) -> str:
+    """规整请求路径:合并重复斜杠 + 去尾斜杠(根 / 保留)。
+    容错节点把 base_url 带尾斜杠拼成 //api/... 或路径带尾斜杠 .../register/ 导致的 404。"""
+    path = re.sub(r"/{2,}", "/", path)
+    return path.rstrip("/") or "/"
 
 
 def _health(db: Database, registry: Registry) -> dict[str, Any]:
@@ -233,7 +241,7 @@ def build_handler(services: Services) -> type[BaseHTTPRequestHandler]:
 
         # ---- 路由 ----
         def do_GET(self) -> None:
-            path = urlparse(self.path).path
+            path = _norm_path(urlparse(self.path).path)
             try:
                 if path == "/api/admin/overview":
                     self._json(build_overview(db, registry))
@@ -286,7 +294,7 @@ def build_handler(services: Services) -> type[BaseHTTPRequestHandler]:
                 self._json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
         def do_POST(self) -> None:
-            path = urlparse(self.path).path
+            path = _norm_path(urlparse(self.path).path)
             try:
                 payload = self._read_json()
                 # 注册类(节点自注册 / 手动加)
